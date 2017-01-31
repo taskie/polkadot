@@ -4,10 +4,10 @@ import (
 	"container/list"
 	"flag"
 	"fmt"
+	"gopkg.in/yaml.v2"
+	"io/ioutil"
 	"os"
 	"os/exec"
-	"io/ioutil"
-	"gopkg.in/yaml.v2"
 	"path/filepath"
 )
 
@@ -16,7 +16,7 @@ type PathConf struct {
 	Path string
 }
 
-func readEntryTags(entryTagsPath string) (entryTags []string) {
+func readEntryTags(entryTagsPath string) (entryTags map[string]string) {
 	buf, err := ioutil.ReadFile(entryTagsPath)
 	if err != nil {
 		panic(err)
@@ -24,6 +24,11 @@ func readEntryTags(entryTagsPath string) (entryTags []string) {
 	err = yaml.Unmarshal(buf, &entryTags)
 	if err != nil {
 		panic(err)
+	}
+	for k, v := range entryTags {
+		if v == "" {
+			entryTags[k] = k
+		}
 	}
 	return
 }
@@ -70,8 +75,8 @@ func readPathConfs(polkaDirPaths []string) (fullPathMap map[string]string) {
 	return
 }
 
-func readTagConfs(polkaDirPaths []string) (allTagConfMap map[string][]string) {
-	allTagConfMap = make(map[string][]string)
+func readTagConfs(polkaDirPaths []string) (allTagConfMap map[string]map[string]string) {
+	allTagConfMap = make(map[string]map[string]string)
 	for _, dirPath := range polkaDirPaths {
 		confPath := dirPath + "/tags.yml"
 		if _, err := os.Stat(confPath); err != nil {
@@ -81,56 +86,54 @@ func readTagConfs(polkaDirPaths []string) (allTagConfMap map[string][]string) {
 		if err != nil {
 			panic(err)
 		}
-		var tagConfMap map[string][]string
+		var tagConfMap map[string]map[string]string
 		err = yaml.Unmarshal(buf, &tagConfMap)
 		if err != nil {
 			panic(err)
 		}
 		for tag, children := range tagConfMap {
+			for k, v := range children {
+				if v == "" {
+					children[k] = k
+				}
+			}
 			allTagConfMap[tag] = children // overwrite
 		}
 	}
 	return
 }
 
-func resolveTags(tagConf map[string][]string, entryTags []string) (acceptTags []string, rejectTags []string) {
+func resolveTags(tagConf map[string]map[string]string, entryTags map[string]string) (
+	acceptTags map[string]string, rejectTags map[string]string) {
 	queue := list.New()
-	for _, tag := range entryTags {
-		queue.PushBack(tag)
+	for k, v := range entryTags {
+		queue.PushBack([]string{k, v})
 	}
-	idx := 0
-	checked := make(map[string]int) // tag -> idx
-	removed := make(map[string]int) // tag -> idx
+	acceptTags = make(map[string]string)
+	rejectTags = make(map[string]string)
 	for queue.Len() > 0 {
-		tag := queue.Remove(queue.Front()).(string)
-		if _, ok := checked[tag]; ok {
+		kv := queue.Remove(queue.Front()).([]string)
+		tag := kv[0]
+		value := kv[1]
+		if _, ok := acceptTags[tag]; ok {
 			continue
-		} else if _, ok := removed[tag]; ok {
+		} else if _, ok := acceptTags[tag]; ok {
 			continue
 		}
 		removeFlag := tag[0] == '!'
 		if removeFlag {
-			removed[tag[1:]] = idx
+			rejectTags[tag[1:]] = value
 		} else {
-			checked[tag] = idx
+			acceptTags[tag] = value
 		}
 		newTags := tagConf[tag]
-		for _, newTag := range newTags {
+		for newTag, v := range newTags {
 			if removeFlag {
-				queue.PushBack("!" + newTag[1:])
+				queue.PushBack([]string{"!" + newTag[1:], v})
 			} else {
-				queue.PushBack(newTag)
+				queue.PushBack([]string{newTag, v})
 			}
 		}
-		idx += 1
-	}
-	acceptTags = make([]string, len(checked))
-	for tag, _ := range checked {
-		acceptTags = append(acceptTags, tag)
-	}
-	rejectTags = make([]string, len(removed))
-	for tag, _ := range removed {
-		rejectTags = append(rejectTags, tag)
 	}
 	return
 }
@@ -154,17 +157,12 @@ func main() {
 	fmt.Println(tagMap)
 
 	tagConf := readTagConfs(polkaDirPaths)
-	// fmt.Println(tagConf)
 
 	acceptTags, rejectTags := resolveTags(tagConf, entryTags)
-
-	for _, tag := range acceptTags {
-		if _, ok := tagMap[tag]; !ok {
-			tagMap[tag] = tag
-		}
+	for tag, value := range acceptTags {
+		tagMap[tag] = value
 	}
-
-	for _, tag := range rejectTags {
+	for tag, _ := range rejectTags {
 		delete(tagMap, tag)
 	}
 
