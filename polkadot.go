@@ -354,9 +354,20 @@ func appendDot(outFile *os.File, source DotSource, tagMap map[string]string) (er
 func CatDots(outFilePath string, sources []DotSource, tagMap map[string]string) (err error) {
 	// expand ~/
 	usr, _ := user.Current()
-	dir := usr.HomeDir
+	homedir := usr.HomeDir
 	if strings.HasPrefix(outFilePath, "~/") {
-		outFilePath = strings.Replace(outFilePath, "~/", dir, 1)
+		outFilePath = strings.Replace(outFilePath, "~/", homedir, 1)
+	}
+
+	// mkdir -p
+	dir := filepath.Dir(outFilePath)
+	if _, err := os.Stat(dir); os.IsNotExist(err) {
+		// use FileMode of current dir
+		fi, err := os.Stat(filepath.Dir(os.Args[0]))
+		if err != nil {
+			return err
+		}
+		os.MkdirAll(dir, fi.Mode())
 	}
 
 	outFile, err := os.Create(outFilePath)
