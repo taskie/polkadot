@@ -4,11 +4,18 @@ import (
 	"container/list"
 	"flag"
 	"fmt"
+	"github.com/fatih/color"
 	"gopkg.in/yaml.v2"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"text/template"
 )
 
 type PathConf struct {
@@ -41,11 +48,12 @@ func searchPaths(pathConfMap map[string]PathConf) (fullPathMap map[string]string
 				fullPathMap[path] = fullPath
 			}
 		} else if conf.Type == "dir" {
-			if _, err := os.Stat(path); err == nil {
-				if fullPath, err := filepath.Abs(path); err == nil {
-					fullPathMap[path] = fullPath
+			if ft, err := os.Stat(path); err == nil {
+				if ft.IsDir() {
+					if fullPath, err := filepath.Abs(path); err == nil {
+						fullPathMap[path] = fullPath
+					}
 				}
-
 			}
 		}
 	}
@@ -105,34 +113,289 @@ func readTagConfs(polkaDirPaths []string) (allTagConfMap map[string]map[string]s
 
 func resolveTags(tagConf map[string]map[string]string, entryTags map[string]string) (
 	acceptTags map[string]string, rejectTags map[string]string) {
+	type TagItem struct {
+		Tag   string
+		Value string
+		Depth int
+	}
+
 	queue := list.New()
 	for k, v := range entryTags {
-		queue.PushBack([]string{k, v})
+		queue.PushBack(TagItem{Tag: k, Value: v, Depth: 1})
 	}
-	acceptTags = make(map[string]string)
-	rejectTags = make(map[string]string)
+	acceptTagItems := make(map[string]TagItem)
+	rejectTagItems := make(map[string]TagItem)
+
+	// breadth first search
 	for queue.Len() > 0 {
-		kv := queue.Remove(queue.Front()).([]string)
-		tag := kv[0]
-		value := kv[1]
-		if _, ok := acceptTags[tag]; ok {
+		item := queue.Remove(queue.Front()).(TagItem)
+		tag, depth := item.Tag, item.Depth
+
+		// remove double negative
+		for strings.HasPrefix(tag, "!!") {
+			tag = tag[2:]
+		}
+
+		if _, ok := acceptTagItems[tag]; ok {
 			continue
-		} else if _, ok := acceptTags[tag]; ok {
+		} else if _, ok := rejectTagItems[tag]; ok {
 			continue
 		}
+
 		removeFlag := tag[0] == '!'
 		if removeFlag {
-			rejectTags[tag[1:]] = value
+			rejectTagItems[tag[1:]] = item
 		} else {
-			acceptTags[tag] = value
+			acceptTagItems[tag] = item
 		}
+
 		newTags := tagConf[tag]
 		for newTag, v := range newTags {
 			if removeFlag {
-				queue.PushBack([]string{"!" + newTag[1:], v})
+				item := TagItem{Tag: "!" + newTag[1:], Value: v, Depth: depth + 1}
+				queue.PushBack(item)
 			} else {
-				queue.PushBack([]string{newTag, v})
+				item := TagItem{Tag: newTag, Value: v, Depth: depth + 1}
+				queue.PushBack(item)
 			}
+		}
+	}
+
+	// delete intersection
+	for k, item := range acceptTagItems {
+		if rejectItem, ok := rejectTagItems[k]; ok {
+			if rejectItem.Depth > item.Depth { // gt
+				delete(rejectTagItems, k)
+			}
+		}
+	}
+	for k, item := range rejectTagItems {
+		if acceptItem, ok := acceptTagItems[k]; ok {
+			if acceptItem.Depth >= item.Depth { // ge
+				delete(acceptTagItems, k)
+			}
+		}
+	}
+
+	acceptTags = make(map[string]string)
+	rejectTags = make(map[string]string)
+	for k, item := range acceptTagItems {
+		acceptTags[k] = item.Value
+	}
+	for k, item := range rejectTagItems {
+		rejectTags[k] = item.Value
+	}
+
+	return
+}
+
+type RawRuleConf struct {
+	Dir  string
+	Dirs []string
+	Pat  string
+}
+
+type RuleConf struct {
+	Directories []string
+	Pattern     *regexp.Regexp
+}
+
+func readRuleConfs(polkaDirPaths []string) (ruleConfMap map[string]RuleConf) {
+	ruleConfMap = make(map[string]RuleConf)
+	for _, dirPath := range polkaDirPaths {
+		confPath := dirPath + "/rules.yml"
+		if _, err := os.Stat(confPath); err != nil {
+			continue
+		}
+		buf, err := ioutil.ReadFile(confPath)
+		if err != nil {
+			panic(err)
+		}
+		var rawRuleConfMap map[string]RawRuleConf
+		err = yaml.Unmarshal(buf, &rawRuleConfMap)
+		if err != nil {
+			panic(err)
+		}
+		for k, v := range rawRuleConfMap {
+			if v.Dir != "" {
+				v.Dirs = append(v.Dirs, v.Dir)
+			}
+			ruleConfMap[k] = RuleConf{
+				Directories: v.Dirs,
+				Pattern:     regexp.MustCompile(v.Pat),
+			}
+		}
+	}
+	return
+}
+
+func toBasenameWithoutExt(path string, recursive bool) (basename string) {
+	basename = filepath.Base(path)
+	oldlen := len(basename)
+	for true {
+		basename = strings.TrimSuffix(basename, filepath.Ext(basename))
+		if oldlen <= len(basename) || !recursive {
+			break
+		}
+		oldlen = len(basename)
+	}
+	return
+}
+
+func extractTagsFromPath(path string) (tags []string) {
+	basename := toBasenameWithoutExt(path, true)
+	tags = strings.Split(basename, "_")[1:]
+	return
+}
+
+type DotSource struct {
+	Name string
+	Path string
+	Tags []string
+}
+
+func searchMatchFile(baseDir string, tagMap map[string]string, ruleConf RuleConf) (sourceMap map[string]DotSource) {
+	sourceMap = make(map[string]DotSource)
+	filepath.Walk(
+		baseDir,
+		func(path string, info os.FileInfo, err error) (newerr error) {
+			if err != nil || info.IsDir() {
+				return
+			}
+			name := strings.TrimPrefix(path, baseDir)
+			name = strings.TrimPrefix(name, "/")
+			if ruleConf.Pattern.MatchString(name) {
+				tags := extractTagsFromPath(name)
+				for _, tag := range tags {
+					if _, ok := tagMap[tag]; !ok {
+						return
+					}
+				}
+				sourceMap[name] = DotSource{
+					Name: name,
+					Path: path,
+					Tags: tags,
+				}
+			}
+			return
+		})
+	return
+}
+
+// https://www.dotnetperls.com/duplicates-go
+func removeDuplicates(elements []DotSource) []DotSource {
+	// Use map to record duplicates as we find them.
+	encountered := map[string]bool{}
+	result := []DotSource{}
+
+	for i := range elements {
+		if encountered[elements[i].Path] == true {
+			// Do not add duplicate.
+		} else {
+			// Record this element as an encountered element.
+			encountered[elements[i].Path] = true
+			// Append to result slice.
+			result = append(result, elements[i])
+		}
+	}
+	// Return the new slice.
+	return result
+}
+
+func mergeSourceArrayMap(sourceArrayMap map[string][]DotSource) (sources []DotSource) {
+	var names []string
+	for name := range sourceArrayMap {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		sourceArray := sourceArrayMap[name]
+		sources = append(sources, sourceArray...)
+	}
+	sources = removeDuplicates(sources)
+	return
+}
+
+// http://stackoverflow.com/questions/15323767/does-golang-have-if-x-in-construct-similar-to-python
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
+func appendDot(outFile *os.File, source DotSource, tagMap map[string]string) (err error) {
+	if stringInSlice("gtp", source.Tags) {
+		tpl, err := template.ParseFiles(source.Path)
+		if err != nil {
+			return err
+		}
+		err = tpl.Execute(outFile, tagMap)
+		if err != nil {
+			return err
+		}
+	} else {
+		inFile, err := os.Open(source.Path)
+		defer inFile.Close()
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(outFile, inFile)
+		if err != nil {
+			return err
+		}
+	}
+	return
+}
+
+func CatDots(outFilePath string, sources []DotSource, tagMap map[string]string) (err error) {
+	// expand ~/
+	usr, _ := user.Current()
+	dir := usr.HomeDir
+	if strings.HasPrefix(outFilePath, "~/") {
+		outFilePath = strings.Replace(outFilePath, "~/", dir, 1)
+	}
+
+	outFile, err := os.Create(outFilePath)
+	defer outFile.Close()
+	if err != nil {
+		return
+	}
+
+	for _, source := range sources {
+		fmt.Println("- " + source.Path)
+		err = appendDot(outFile, source, tagMap)
+		if err != nil {
+			return
+		}
+	}
+	return
+}
+
+func Polkadot(polkaDirPaths []string, tagMap map[string]string, ruleConfMap map[string]RuleConf) (err error) {
+	for outFile, ruleConf := range ruleConfMap {
+		sourceArrayMap := make(map[string][]DotSource)
+		color.New(color.FgBlue).Add(color.Bold).Println(outFile)
+		for _, dir := range ruleConf.Directories {
+			for _, rootDir := range polkaDirPaths {
+				baseDir := rootDir + dir
+				sourceMap := searchMatchFile(baseDir, tagMap, ruleConf)
+				for name, source := range sourceMap {
+					_, ok := sourceArrayMap[name]
+					if !ok {
+						sourceArrayMap[name] = make([]DotSource, 0)
+					}
+					sourceArrayMap[name] = append(sourceArrayMap[name], source)
+				}
+			}
+		}
+		sources := mergeSourceArrayMap(sourceArrayMap)
+		err = CatDots(outFile, sources, tagMap)
+		if err != nil {
+			return
 		}
 	}
 	return
@@ -147,16 +410,19 @@ func main() {
 	entryTagsPath := flag.Arg(0)
 	polkaDirPaths := flag.Args()[1:]
 
-	fmt.Println("dotfiles dir: " + currentDirPath)
-
-	fmt.Println("entry tags path: " + entryTagsPath)
 	entryTags := readEntryTags(entryTagsPath)
-	fmt.Println(entryTags)
-
 	tagMap := readPathConfs(polkaDirPaths)
-	fmt.Println(tagMap)
-
 	tagConf := readTagConfs(polkaDirPaths)
+	ruleConf := readRuleConfs(polkaDirPaths)
+
+	fmt.Println("dotfiles dir: " + currentDirPath)
+	fmt.Println("entry tags path: " + entryTagsPath)
+	fmt.Printf("entry tags: %v\n", entryTags)
+	fmt.Printf("paths: %v\n", tagMap)
+
+	tagMap["dotfiles"] = currentDirPath
+	tagMap["gtp"] = "gtp"
+	entryTags["default"] = "default"
 
 	acceptTags, rejectTags := resolveTags(tagConf, entryTags)
 	for tag, value := range acceptTags {
@@ -166,5 +432,11 @@ func main() {
 		delete(tagMap, tag)
 	}
 
-	fmt.Println(tagMap)
+	fmt.Printf("resolved tags: %v\n", tagMap)
+	fmt.Printf("rules: %v\n", ruleConf)
+
+	err = Polkadot(polkaDirPaths, tagMap, ruleConf)
+	if err != nil {
+		panic(err)
+	}
 }
