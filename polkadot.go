@@ -327,26 +327,37 @@ func stringInSlice(a string, list []string) bool {
 	return false
 }
 
+func appendDotGtp(outFile *os.File, source DotSource, tagMap map[string]string) (err error) {
+	tpl, err := template.ParseFiles(source.Path)
+	if err != nil {
+		return
+	}
+
+	err = tpl.Execute(outFile, tagMap)
+	if err != nil {
+		return
+	}
+	return
+}
+
+func appendDotText(outFile *os.File, source DotSource, tagMap map[string]string) (err error) {
+	inFile, err := os.Open(source.Path)
+	defer inFile.Close()
+	if err != nil {
+		return
+	}
+	_, err = io.Copy(outFile, inFile)
+	if err != nil {
+		return
+	}
+	return
+}
+
 func appendDot(outFile *os.File, source DotSource, tagMap map[string]string) (err error) {
 	if stringInSlice("gtp", source.Tags) {
-		tpl, err := template.ParseFiles(source.Path)
-		if err != nil {
-			return err
-		}
-		err = tpl.Execute(outFile, tagMap)
-		if err != nil {
-			return err
-		}
+		err = appendDotGtp(outFile, source, tagMap)
 	} else {
-		inFile, err := os.Open(source.Path)
-		defer inFile.Close()
-		if err != nil {
-			return err
-		}
-		_, err = io.Copy(outFile, inFile)
-		if err != nil {
-			return err
-		}
+		err = appendDotText(outFile, source, tagMap)
 	}
 	return
 }
