@@ -423,12 +423,20 @@ func Polkadot(polkaDirPaths []string, tagMap map[string]string, ruleConfMap map[
 	return
 }
 
+const version = "0.0.2a"
+
 func main() {
-	currentDirPath, err := filepath.Abs(filepath.Dir(os.Args[0]))
+	versionFlag := flag.Bool("V", false, "show version info")
+	flag.Parse()
+	if *versionFlag {
+		fmt.Println(version)
+		os.Exit(0)
+	}
+
+	currentDirPath, err := os.Getwd()
 	if err != nil {
 		panic(err)
 	}
-	flag.Parse()
 	entryTagsPath := flag.Arg(0)
 	polkaDirPaths := flag.Args()[1:]
 
