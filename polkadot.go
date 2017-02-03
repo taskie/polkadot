@@ -55,6 +55,11 @@ func searchPaths(pathConfMap map[string]PathConf) (fullPathMap map[string]string
 					}
 				}
 			}
+		} else if conf.Type == "env" {
+			env := os.Getenv(conf.Path)
+			fullPathMap[path] = env
+		} else {
+			panic("unknown pathconf type" + conf.Type)
 		}
 	}
 	return
