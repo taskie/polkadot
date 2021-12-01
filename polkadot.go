@@ -59,11 +59,18 @@ func searchPaths(pathConfMap map[string]PathConf) (fullPathMap map[string]string
 			if fullPath, err := exec.LookPath(path); err == nil {
 				fullPathMap[path] = fullPath
 			}
-		} else if conf.Type == "dir" {
-			dirPath := expandHome(conf.Path)
-			if ft, err := os.Stat(dirPath); err == nil {
-				if ft.IsDir() {
-					if fullPath, err := filepath.Abs(dirPath); err == nil {
+		} else if conf.Type == "file" || conf.Type == "dir" {
+			filePath := expandHome(conf.Path)
+			if ft, err := os.Stat(filePath); err == nil {
+				valid := true
+				if conf.Type == "file" {
+					valid = valid && !ft.IsDir()
+				}
+				if conf.Type == "dir" {
+					valid = valid && ft.IsDir()
+				}
+				if valid {
+					if fullPath, err := filepath.Abs(filePath); err == nil {
 						fullPathMap[path] = fullPath
 					}
 				}
