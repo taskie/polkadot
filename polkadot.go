@@ -19,6 +19,17 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+// utils
+
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	usr, _ := user.Current()
+	homedir := usr.HomeDir + "/"
+	return strings.Replace(path, "~/", homedir, 1)
+}
+
 type PathConf struct {
 	Type string
 	Path string
@@ -49,9 +60,10 @@ func searchPaths(pathConfMap map[string]PathConf) (fullPathMap map[string]string
 				fullPathMap[path] = fullPath
 			}
 		} else if conf.Type == "dir" {
-			if ft, err := os.Stat(path); err == nil {
+			dirPath := expandHome(conf.Path)
+			if ft, err := os.Stat(dirPath); err == nil {
 				if ft.IsDir() {
-					if fullPath, err := filepath.Abs(path); err == nil {
+					if fullPath, err := filepath.Abs(dirPath); err == nil {
 						fullPathMap[path] = fullPath
 					}
 				}
@@ -370,11 +382,7 @@ func appendDot(outFile *os.File, source DotSource, tagMap map[string]string) (er
 
 func CatDots(outFilePath string, sources []DotSource, tagMap map[string]string) (err error) {
 	// expand ~/
-	usr, _ := user.Current()
-	homedir := usr.HomeDir
-	if strings.HasPrefix(outFilePath, "~/") {
-		outFilePath = strings.Replace(outFilePath, "~/", homedir, 1)
-	}
+	outFilePath = expandHome(outFilePath)
 
 	// mkdir -p
 	dir := filepath.Dir(outFilePath)
