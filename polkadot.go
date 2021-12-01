@@ -4,8 +4,6 @@ import (
 	"container/list"
 	"flag"
 	"fmt"
-	"github.com/fatih/color"
-	"gopkg.in/yaml.v2"
 	"io"
 	"io/ioutil"
 	"os"
@@ -16,6 +14,9 @@ import (
 	"sort"
 	"strings"
 	"text/template"
+
+	"github.com/fatih/color"
+	"gopkg.in/yaml.v2"
 )
 
 type PathConf struct {
@@ -428,7 +429,7 @@ func Polkadot(polkaDirPaths []string, tagMap map[string]string, ruleConfMap map[
 	return
 }
 
-const version = "0.0.2a"
+const version = "0.0.3"
 
 func main() {
 	versionFlag := flag.Bool("V", false, "show version info")
