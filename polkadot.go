@@ -17,6 +17,9 @@ import (
 	"text/template"
 
 	"github.com/fatih/color"
+	"github.com/hexops/gotextdiff"
+	"github.com/hexops/gotextdiff/myers"
+	"github.com/hexops/gotextdiff/span"
 	"gopkg.in/yaml.v2"
 )
 
@@ -87,6 +90,9 @@ type App struct {
 	sourcesMap     map[string][]DotSource
 	sourcesEntries []DotSourcesEntry
 	// Generate
+	// Diff
+	distributeStats []*DistributeStat
+	// Distribute
 }
 
 func (a *App) Prepare() error {
@@ -155,6 +161,22 @@ func (a *App) Prepare() error {
 
 func (a *App) Execute() error {
 	err := a.Generate()
+	if err != nil {
+		return err
+	}
+	dstats, err := a.Diff()
+	if err != nil {
+		return err
+	}
+	for _, dstat := range dstats {
+		if dstat.notModified {
+			log.Printf("Not Modified: %s -> %s", dstat.src, dstat.dst)
+		} else {
+			log.Printf("Distribute: %s -> %s", dstat.src, dstat.dst)
+		}
+	}
+	a.distributeStats = dstats
+	err = a.Distribute()
 	if err != nil {
 		return err
 	}
@@ -281,6 +303,36 @@ func (a *App) Generate() error {
 	generator := Generator{}
 	for _, entry := range a.sourcesEntries {
 		err := generator.Generate(entry.path, entry.sources, a.tagMap)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) Diff() ([]*DistributeStat, error) {
+	dstats := make([]*DistributeStat, 0)
+	d := Distributor{}
+	for _, entry := range a.sourcesEntries {
+		src := entry.path
+		relPath, err := filepath.Rel("distribute/", src)
+		if err != nil {
+			return nil, err
+		}
+		dst := filepath.Join(expandHome("~/"), relPath)
+		dstat, err := d.Diff(src, dst)
+		if err != nil {
+			return nil, err
+		}
+		dstats = append(dstats, dstat)
+	}
+	return dstats, nil
+}
+
+func (a *App) Distribute() error {
+	d := Distributor{}
+	for _, dstat := range a.distributeStats {
+		err := d.Distribute(dstat)
 		if err != nil {
 			return err
 		}
@@ -612,6 +664,74 @@ func (g *Generator) Generate(outFilePath string, sources []DotSource, tagMap map
 	defer outFile.Close()
 
 	return g.concatDots(outFile, sources, tagMap)
+}
+
+// Distributor
+
+type Distributor struct{}
+
+type DistributeStat struct {
+	src         string
+	dst         string
+	dstFound    bool
+	notModified bool
+}
+
+func (d *Distributor) Diff(src, dst string) (*DistributeStat, error) {
+	srcBytes, err := ioutil.ReadFile(src)
+	if err != nil {
+		return nil, err
+	}
+	dstFound := false
+	notModified := false
+	dstStat, err := os.Stat(dst)
+	if err == nil {
+		// file exists
+		dstFound = true
+		if !dstStat.Mode().IsRegular() {
+			return nil, fmt.Errorf("%s is not regular file", dst)
+		}
+		dstBytes, err := ioutil.ReadFile(dst)
+		if err != nil {
+			return nil, err
+		}
+		srcStr := string(srcBytes)
+		dstStr := string(dstBytes)
+		if srcStr == dstStr {
+			notModified = true
+		}
+		edits := myers.ComputeEdits(span.URIFromPath(dst), dstStr, srcStr)
+		diff := fmt.Sprint(gotextdiff.ToUnified(dst, src, dstStr, edits))
+		if diff != "" {
+			fmt.Print(diff)
+		}
+	}
+	dstat := DistributeStat{
+		src:         src,
+		dst:         dst,
+		dstFound:    dstFound,
+		notModified: notModified,
+	}
+	return &dstat, nil
+}
+
+func (d *Distributor) Distribute(dstat *DistributeStat) error {
+	if dstat.notModified {
+		return nil
+	}
+	srcBytes, err := ioutil.ReadFile(dstat.src)
+	if err != nil {
+		return err
+	}
+	err = os.MkdirAll(filepath.Dir(dstat.dst), 0755)
+	if err != nil {
+		return err
+	}
+	err = ioutil.WriteFile(dstat.dst, srcBytes, 0666)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // Utils
