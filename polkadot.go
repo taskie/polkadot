@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -164,7 +163,7 @@ func (a *App) Execute() error {
 // Application tasks
 
 func (a *App) LoadEntry() (map[string]string, error) {
-	buf, err := ioutil.ReadFile(a.entryPath)
+	buf, err := os.ReadFile(a.entryPath)
 	if err != nil {
 		return nil, err
 	}
@@ -189,7 +188,7 @@ func (a *App) Collect() (map[string]string, error) {
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
-		buf, err := ioutil.ReadFile(confPath)
+		buf, err := os.ReadFile(confPath)
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +215,7 @@ func (a *App) LoadTags() (map[string]map[string]string, error) {
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
-		buf, err := ioutil.ReadFile(confPath)
+		buf, err := os.ReadFile(confPath)
 		if err != nil {
 			return nil, err
 		}
@@ -244,7 +243,7 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
-		buf, err := ioutil.ReadFile(confPath)
+		buf, err := os.ReadFile(confPath)
 		if err != nil {
 			return nil, err
 		}
