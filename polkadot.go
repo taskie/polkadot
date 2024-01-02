@@ -204,8 +204,8 @@ func (a *App) Collect() (map[string]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		for name, value := range subProps {
-			props[name] = value
+		for key, value := range subProps {
+			props[key] = value
 		}
 	}
 	return props, nil
@@ -305,43 +305,50 @@ func (a *App) Generate() error {
 
 // Collect
 
-type PathsConf map[string]*CollectorEntry
+type PathsConf map[string][]CollectorEntry
 
 type Collector struct{}
 
 type CollectorEntry struct {
 	Type string
+	Name string
 	Path string
 }
 
 func (c *Collector) Collect(pathsConf PathsConf) (map[string]string, error) {
 	props := make(map[string]string)
-	for name, entry := range pathsConf {
-		if entry.Type == "exec" {
-			if fullPath, err := exec.LookPath(name); err == nil {
-				props[name] = fullPath
+	for key, entries := range pathsConf {
+		for _, entry := range entries {
+			name := key
+			if entry.Name != "" {
+				name = entry.Name
 			}
-		} else if entry.Type == "file" || entry.Type == "dir" {
-			filePath := expandHome(entry.Path)
-			if ft, err := os.Stat(filePath); err == nil {
-				valid := true
-				if entry.Type == "file" {
-					valid = valid && !ft.IsDir()
+			if entry.Type == "exec" {
+				if fullPath, err := exec.LookPath(name); err == nil {
+					props[key] = fullPath
 				}
-				if entry.Type == "dir" {
-					valid = valid && ft.IsDir()
-				}
-				if valid {
-					if fullPath, err := filepath.Abs(filePath); err == nil {
-						props[name] = fullPath
+			} else if entry.Type == "file" || entry.Type == "dir" {
+				filePath := expandHome(entry.Path)
+				if ft, err := os.Stat(filePath); err == nil {
+					valid := true
+					if entry.Type == "file" {
+						valid = valid && !ft.IsDir()
+					}
+					if entry.Type == "dir" {
+						valid = valid && ft.IsDir()
+					}
+					if valid {
+						if fullPath, err := filepath.Abs(filePath); err == nil {
+							props[key] = fullPath
+						}
 					}
 				}
+			} else if entry.Type == "env" {
+				env := os.Getenv(name)
+				props[key] = env
+			} else {
+				return nil, fmt.Errorf("unknown env collector entry type: %s", entry.Type)
 			}
-		} else if entry.Type == "env" {
-			env := os.Getenv(entry.Path)
-			props[name] = env
-		} else {
-			return nil, fmt.Errorf("unknown env collector entry type: %s", entry.Type)
 		}
 	}
 	return props, nil
