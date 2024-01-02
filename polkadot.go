@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"container/list"
 	"flag"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"text/template"
@@ -112,12 +114,12 @@ func (a *App) Prepare() error {
 	}
 	a.ruleConfMap = ruleConf
 
-	acceptTags, rejectTags, err := a.Expand()
+	acceptedTags, rejectedTags, err := a.Expand()
 	if err != nil {
 		return err
 	}
-	log.Printf("accept tags: %+v\n", acceptTags)
-	log.Printf("reject tags: %+v\n", rejectTags)
+	log.Printf("accepted tags: %+v\n", acceptedTags)
+	log.Printf("rejected tags: %+v\n", rejectedTags)
 
 	tagMap, err := a.Collect()
 	if err != nil {
@@ -126,10 +128,10 @@ func (a *App) Prepare() error {
 	log.Printf("collected tags: %+v\n", tagMap)
 	tagMap["dotfiles"] = a.dotfilesDirPath
 	tagMap["gtp"] = "gtp"
-	for tag, value := range acceptTags {
+	for tag, value := range acceptedTags {
 		tagMap[tag] = value
 	}
-	for tag := range rejectTags {
+	for tag := range rejectedTags {
 		delete(tagMap, tag)
 	}
 	log.Printf("resolved tags: %+v\n", tagMap)
@@ -272,8 +274,8 @@ func (a *App) Weave() (map[string][]DotSource, error) {
 
 func (a *App) Expand() (map[string]string, map[string]string, error) {
 	expander := Expander{}
-	acceptTags, rejectTags := expander.Expand(a.tagConf, a.entryTags)
-	return acceptTags, rejectTags, nil
+	acceptedTags, rejectedTags := expander.Expand(a.tagConf, a.entryTags)
+	return acceptedTags, rejectedTags, nil
 }
 
 func (a *App) Generate() error {
@@ -335,81 +337,117 @@ func (c *Collector) Collect(pathsConf PathsConf) (map[string]string, error) {
 
 type Expander struct{}
 
-func (e *Expander) Expand(tagConf map[string]map[string]string, entryTags map[string]string) (acceptTags map[string]string, rejectTags map[string]string) {
-	type TagItem struct {
-		Tag   string
-		Value string
-		Depth int
-	}
+type tagItem struct {
+	Tag        string
+	Value      string
+	Depth      int
+	Negative   bool
+	Importance int
+}
 
+func makeTagItem(rawTag string, value string, depth int) tagItem {
+	negative := false
+	importance := 0
+	tag := rawTag
+	for strings.HasPrefix(tag, "!") {
+		exclamationCount := 0
+		for _, c := range tag {
+			if c == '!' {
+				exclamationCount++
+			} else {
+				break
+			}
+		}
+		negative = exclamationCount%2 == 1
+		tag = rawTag[exclamationCount:]
+		importance = exclamationCount
+	}
+	return tagItem{
+		Tag:        tag,
+		Value:      value,
+		Depth:      depth,
+		Negative:   negative,
+		Importance: importance,
+	}
+}
+
+func (e *Expander) walk(tagConf map[string]map[string]string, entryTags map[string]string) []tagItem {
 	queue := list.New()
 	for k, v := range entryTags {
-		queue.PushBack(TagItem{Tag: k, Value: v, Depth: 1})
+		queue.PushBack(makeTagItem(k, v, 0))
 	}
-	acceptTagItems := make(map[string]TagItem)
-	rejectTagItems := make(map[string]TagItem)
+	seenTags := make(map[string]int)
+	tagItems := make([]tagItem, 0)
 
 	// breadth first search
 	for queue.Len() > 0 {
-		item := queue.Remove(queue.Front()).(TagItem)
-		tag, depth := item.Tag, item.Depth
+		item := queue.Remove(queue.Front()).(tagItem)
+		tagItems = append(tagItems, item)
 
-		// remove double negative
-		for strings.HasPrefix(tag, "!!") {
-			tag = tag[2:]
+		if depth, ok := seenTags[item.Tag]; ok {
+			if depth < item.Depth {
+				continue
+			}
 		}
+		seenTags[item.Tag] = item.Depth
 
-		if _, ok := acceptTagItems[tag]; ok {
+		if item.Negative {
 			continue
-		} else if _, ok := rejectTagItems[tag]; ok {
-			continue
 		}
 
-		removeFlag := tag[0] == '!'
-		if removeFlag {
-			rejectTagItems[tag[1:]] = item
-		} else {
-			acceptTagItems[tag] = item
-		}
-
-		newTags := tagConf[tag]
+		newTags := tagConf[item.Tag]
 		for newTag, v := range newTags {
-			if removeFlag {
-				item := TagItem{Tag: "!" + newTag[1:], Value: v, Depth: depth + 1}
-				queue.PushBack(item)
-			} else {
-				item := TagItem{Tag: newTag, Value: v, Depth: depth + 1}
-				queue.PushBack(item)
-			}
+			item := makeTagItem(newTag, v, item.Depth+1)
+			queue.PushBack(item)
 		}
 	}
 
-	// delete intersection
-	for k, item := range acceptTagItems {
-		if rejectItem, ok := rejectTagItems[k]; ok {
-			if rejectItem.Depth > item.Depth { // gt
-				delete(rejectTagItems, k)
-			}
+	// order by importance desc, depth (, tag, value)
+	slices.SortFunc(tagItems, func(a, b tagItem) int {
+		importance := cmp.Compare(b.Importance, a.Importance)
+		if importance != 0 {
+			return importance
 		}
+		depth := cmp.Compare(a.Depth, b.Depth)
+		if depth != 0 {
+			return depth
+		}
+		tag := cmp.Compare(a.Tag, b.Tag)
+		if tag != 0 {
+			return tag
+		}
+		return cmp.Compare(a.Value, b.Value)
+	})
+
+	// dedup
+	uniqTagItems := make([]tagItem, 0)
+	uniqTags := make(map[string]struct{})
+	for _, item := range tagItems {
+		if _, ok := uniqTags[item.Tag]; ok {
+			continue
+		}
+		uniqTags[item.Tag] = struct{}{}
+		uniqTagItems = append(uniqTagItems, item)
 	}
-	for k, item := range rejectTagItems {
-		if acceptItem, ok := acceptTagItems[k]; ok {
-			if acceptItem.Depth >= item.Depth { // ge
-				delete(acceptTagItems, k)
-			}
+
+	return uniqTagItems
+}
+
+func (e *Expander) Expand(tagConf map[string]map[string]string, entryTags map[string]string) (acceptedTags map[string]string, rejectedTags map[string]string) {
+	tagItems := e.walk(tagConf, entryTags)
+
+	acceptedTags = make(map[string]string)
+	rejectedTags = make(map[string]string)
+
+	for _, item := range tagItems {
+		if item.Negative {
+			rejectedTags[item.Tag] = item.Value
+		} else {
+			acceptedTags[item.Tag] = item.Value
 		}
 	}
 
-	acceptTags = make(map[string]string)
-	rejectTags = make(map[string]string)
-	for k, item := range acceptTagItems {
-		acceptTags[k] = item.Value
-	}
-	for k, item := range rejectTagItems {
-		rejectTags[k] = item.Value
-	}
-
-	return
+	return acceptedTags, rejectedTags
 }
 
 // Weave
