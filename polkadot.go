@@ -21,7 +21,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const version = "0.0.3"
+const version = "0.1.0"
 
 func main() {
 	err := run()
