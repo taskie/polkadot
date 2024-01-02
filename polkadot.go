@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -85,8 +85,7 @@ type App struct {
 	// Collect
 	tagMap map[string]string
 	// Weave
-	sourcesMap     map[string][]DotSource
-	sourcesEntries []DotSourcesEntry
+	dotEntries []DotEntry
 	// Generate
 }
 
@@ -137,20 +136,22 @@ func (a *App) Prepare() error {
 	log.Printf("resolved tags: %+v\n", tagMap)
 	a.tagMap = tagMap
 
-	sourcesMap, err := a.Weave()
+	dotEntries, err := a.Weave()
 	if err != nil {
 		return err
 	}
-	sourcesEntries := dotSourcesMapToEntries(sourcesMap)
 	log.Printf("sources: (following)")
-	for _, entry := range sourcesEntries {
-		color.New(color.FgBlue).Println(entry.path)
-		for _, source := range entry.sources {
+	for _, entry := range dotEntries {
+		if entry.Target.Mode != nil {
+			color.New(color.FgBlue).Printf("%s (mode: %o)\n", entry.Path(), *entry.Target.Mode)
+		} else {
+			color.New(color.FgBlue).Println(entry.Path())
+		}
+		for _, source := range entry.Sources {
 			fmt.Println("- " + source.Path)
 		}
 	}
-	a.sourcesMap = sourcesMap
-	a.sourcesEntries = sourcesEntries
+	a.dotEntries = dotEntries
 	return nil
 }
 
@@ -258,16 +259,29 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 			if v.Dir != "" {
 				v.Dirs = append(v.Dirs, v.Dir)
 			}
+			var mode *int = nil
+			if v.Mode != "" {
+				modeInt, err := strconv.ParseInt(v.Mode, 8, 32)
+				if err != nil {
+					return nil, err
+				}
+				if modeInt < 0 || modeInt > 0777 {
+					return nil, fmt.Errorf("invalid mode: %s", v.Mode)
+				}
+				modeValue := int(modeInt)
+				mode = &modeValue
+			}
 			ruleConfMap[k] = WeaverRule{
 				Directories: v.Dirs,
 				Pattern:     regexp.MustCompile(v.Pat),
+				Mode:        mode,
 			}
 		}
 	}
 	return ruleConfMap, nil
 }
 
-func (a *App) Weave() (map[string][]DotSource, error) {
+func (a *App) Weave() ([]DotEntry, error) {
 	weaver := Weaver{}
 	return weaver.Weave(a.polkaDirPaths, a.tagMap, a.ruleConfMap)
 }
@@ -280,8 +294,8 @@ func (a *App) Expand() (map[string]string, map[string]string, error) {
 
 func (a *App) Generate() error {
 	generator := Generator{}
-	for _, entry := range a.sourcesEntries {
-		err := generator.Generate(entry.path, entry.sources, a.tagMap)
+	for _, entry := range a.dotEntries {
+		err := generator.Generate(entry, a.tagMap)
 		if err != nil {
 			return err
 		}
@@ -460,11 +474,13 @@ type WeaverEntry struct {
 	Dir  string
 	Dirs []string
 	Pat  string
+	Mode string
 }
 
 type WeaverRule struct {
 	Directories []string
 	Pattern     *regexp.Regexp
+	Mode        *int
 }
 
 type DotSource struct {
@@ -473,13 +489,23 @@ type DotSource struct {
 	Tags []string
 }
 
-type DotSourcesEntry struct {
-	path    string
-	sources []DotSource
+type DotTarget struct {
+	Path string
+	Mode *int
 }
 
-func (w *Weaver) Weave(polkaDirPaths []string, tagMap map[string]string, ruleConfMap map[string]WeaverRule) (map[string][]DotSource, error) {
+type DotEntry struct {
+	Sources []DotSource
+	Target  DotTarget
+}
+
+func (e *DotEntry) Path() string {
+	return e.Target.Path
+}
+
+func (w *Weaver) Weave(polkaDirPaths []string, tagMap map[string]string, ruleConfMap map[string]WeaverRule) ([]DotEntry, error) {
 	sourcesMap := make(map[string][]DotSource)
+	targetMap := make(map[string]DotTarget)
 	for outFile, ruleConf := range ruleConfMap {
 		sourceArrayMap := make(map[string][]DotSource)
 		for _, dir := range ruleConf.Directories {
@@ -500,8 +526,13 @@ func (w *Weaver) Weave(polkaDirPaths []string, tagMap map[string]string, ruleCon
 		}
 		sources := mergeSourceArrayMap(sourceArrayMap)
 		sourcesMap[outFile] = sources
+		targetMap[outFile] = DotTarget{
+			Path: outFile,
+			Mode: ruleConf.Mode,
+		}
 	}
-	return sourcesMap, nil
+	dotEntries := dotMapsToEntries(sourcesMap, targetMap)
+	return dotEntries, nil
 }
 
 func (w *Weaver) Walk(baseDir string, tagMap map[string]string, ruleConf WeaverRule) (map[string]DotSource, error) {
@@ -555,7 +586,7 @@ func mergeSourceArrayMap(sourceArrayMap map[string][]DotSource) (sources []DotSo
 	for name := range sourceArrayMap {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	slices.Sort(names)
 
 	for _, name := range names {
 		sourceArray := sourceArrayMap[name]
@@ -565,14 +596,16 @@ func mergeSourceArrayMap(sourceArrayMap map[string][]DotSource) (sources []DotSo
 	return
 }
 
-// Stabilizes the order of dot sources.
-func dotSourcesMapToEntries(sourcesMap map[string][]DotSource) []DotSourcesEntry {
-	entries := make([]DotSourcesEntry, 0, len(sourcesMap))
+// Stabilizes the order of dot entries.
+func dotMapsToEntries(sourcesMap map[string][]DotSource, targetMap map[string]DotTarget) []DotEntry {
+	entries := make([]DotEntry, 0, len(sourcesMap))
 	for outFilePath, sources := range sourcesMap {
-		entries = append(entries, DotSourcesEntry{path: outFilePath, sources: sources})
+		target := targetMap[outFilePath]
+		entry := DotEntry{Sources: sources, Target: target}
+		entries = append(entries, entry)
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].path < entries[j].path
+	slices.SortFunc(entries, func(a, b DotEntry) int {
+		return cmp.Compare(a.Path(), b.Path())
 	})
 	return entries
 }
@@ -627,9 +660,9 @@ func (g *Generator) concatDots(w io.Writer, sources []DotSource, tagMap map[stri
 	return err
 }
 
-func (g *Generator) Generate(outFilePath string, sources []DotSource, tagMap map[string]string) error {
+func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error {
 	// expand ~/
-	outFilePath = expandHome(outFilePath)
+	outFilePath := expandHome(dotEntry.Path())
 
 	// mkdir -p
 	dir := filepath.Dir(outFilePath)
@@ -642,13 +675,17 @@ func (g *Generator) Generate(outFilePath string, sources []DotSource, tagMap map
 		os.MkdirAll(dir, fi.Mode())
 	}
 
-	outFile, err := os.Create(outFilePath)
+	mode := 0644
+	if dotEntry.Target.Mode != nil {
+		mode = *dotEntry.Target.Mode
+	}
+	outFile, err := os.OpenFile(outFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(mode))
 	if err != nil {
 		return err
 	}
 	defer outFile.Close()
 
-	return g.concatDots(outFile, sources, tagMap)
+	return g.concatDots(outFile, dotEntry.Sources, tagMap)
 }
 
 // Utils
