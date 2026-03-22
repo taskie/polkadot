@@ -113,10 +113,7 @@ func (a *App) Prepare() error {
 	}
 	a.ruleConfMap = ruleConf
 
-	acceptedTags, rejectedTags, err := a.Expand()
-	if err != nil {
-		return err
-	}
+	acceptedTags, rejectedTags := a.Expand()
 	log.Printf("accepted tags: %+v\n", acceptedTags)
 	log.Printf("rejected tags: %+v\n", rejectedTags)
 
@@ -156,11 +153,7 @@ func (a *App) Prepare() error {
 }
 
 func (a *App) Execute() error {
-	err := a.Generate()
-	if err != nil {
-		return err
-	}
-	return nil
+	return a.Generate()
 }
 
 // Application tasks
@@ -187,7 +180,7 @@ func (a *App) Collect() (map[string]string, error) {
 	collector := Collector{}
 	props := make(map[string]string)
 	for _, dirPath := range a.polkaDirPaths {
-		confPath := dirPath + "/paths.yml"
+		confPath := filepath.Join(dirPath, "paths.yml")
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
@@ -214,7 +207,7 @@ func (a *App) Collect() (map[string]string, error) {
 func (a *App) LoadTags() (map[string]map[string]string, error) {
 	propsDef := make(map[string]map[string]string)
 	for _, dirPath := range a.polkaDirPaths {
-		confPath := dirPath + "/tags.yml"
+		confPath := filepath.Join(dirPath, "tags.yml")
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
@@ -242,7 +235,7 @@ func (a *App) LoadTags() (map[string]map[string]string, error) {
 func (a *App) LoadRules() (map[string]WeaverRule, error) {
 	ruleConfMap := make(map[string]WeaverRule)
 	for _, dirPath := range a.polkaDirPaths {
-		confPath := dirPath + "/rules.yml"
+		confPath := filepath.Join(dirPath, "rules.yml")
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
@@ -286,10 +279,9 @@ func (a *App) Weave() ([]DotEntry, error) {
 	return weaver.Weave(a.polkaDirPaths, a.tagMap, a.ruleConfMap)
 }
 
-func (a *App) Expand() (map[string]string, map[string]string, error) {
+func (a *App) Expand() (map[string]string, map[string]string) {
 	expander := Expander{}
-	acceptedTags, rejectedTags := expander.Expand(a.tagConf, a.entryTags)
-	return acceptedTags, rejectedTags, nil
+	return expander.Expand(a.tagConf, a.entryTags)
 }
 
 func (a *App) Generate() error {
@@ -367,28 +359,14 @@ type tagItem struct {
 }
 
 func makeTagItem(rawTag string, value string, depth int) tagItem {
-	negative := false
-	importance := 0
-	tag := rawTag
-	for strings.HasPrefix(tag, "!") {
-		exclamationCount := 0
-		for _, c := range tag {
-			if c == '!' {
-				exclamationCount++
-			} else {
-				break
-			}
-		}
-		negative = exclamationCount%2 == 1
-		tag = rawTag[exclamationCount:]
-		importance = exclamationCount
-	}
+	tag := strings.TrimLeft(rawTag, "!")
+	exclamationCount := len(rawTag) - len(tag)
 	return tagItem{
 		Tag:        tag,
 		Value:      value,
 		Depth:      depth,
-		Negative:   negative,
-		Importance: importance,
+		Negative:   exclamationCount%2 == 1,
+		Importance: exclamationCount,
 	}
 }
 
@@ -517,7 +495,7 @@ func (w *Weaver) Weave(polkaDirPaths []string, tagMap map[string]string, ruleCon
 		sourceArrayMap := make(map[string][]DotSource)
 		for _, dir := range ruleConf.Directories {
 			for _, rootDir := range polkaDirPaths {
-				baseDir := rootDir + dir
+				baseDir := filepath.Join(rootDir, dir)
 				sourceMap, err := w.Walk(baseDir, tagMap, ruleConf)
 				if err != nil {
 					return nil, err
@@ -626,11 +604,7 @@ func (g *Generator) appendDotGtp(w io.Writer, source DotSource, tagMap map[strin
 	if err != nil {
 		return err
 	}
-	err = tpl.Execute(w, tagMap)
-	if err != nil {
-		return err
-	}
-	return err
+	return tpl.Execute(w, tagMap)
 }
 
 func (g *Generator) appendDotText(w io.Writer, source DotSource, tagMap map[string]string) (err error) {
@@ -647,24 +621,19 @@ func (g *Generator) appendDotText(w io.Writer, source DotSource, tagMap map[stri
 }
 
 func (g *Generator) appendDot(w io.Writer, source DotSource, tagMap map[string]string) error {
-	var err error = nil
-	if stringInSlice("gtp", source.Tags) {
-		err = g.appendDotGtp(w, source, tagMap)
-	} else {
-		err = g.appendDotText(w, source, tagMap)
+	if slices.Contains(source.Tags, "gtp") {
+		return g.appendDotGtp(w, source, tagMap)
 	}
-	return err
+	return g.appendDotText(w, source, tagMap)
 }
 
 func (g *Generator) concatDots(w io.Writer, sources []DotSource, tagMap map[string]string) error {
-	var err error = nil
 	for _, source := range sources {
-		err = g.appendDot(w, source, tagMap)
-		if err != nil {
+		if err := g.appendDot(w, source, tagMap); err != nil {
 			return err
 		}
 	}
-	return err
+	return nil
 }
 
 func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error {
@@ -679,7 +648,9 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 		if err != nil {
 			return err
 		}
-		os.MkdirAll(dir, fi.Mode())
+		if err := os.MkdirAll(dir, fi.Mode()); err != nil {
+			return err
+		}
 	}
 
 	mode := 0644
@@ -697,22 +668,15 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 
 // Utils
 
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
-
 func expandHome(path string) string {
 	if !strings.HasPrefix(path, "~/") {
 		return path
 	}
-	usr, _ := user.Current()
-	homedir := usr.HomeDir + "/"
-	return strings.Replace(path, "~/", homedir, 1)
+	usr, err := user.Current()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(usr.HomeDir, strings.TrimPrefix(path, "~/"))
 }
 
 func toBasenameWithoutExt(path string, recursive bool) (basename string) {
