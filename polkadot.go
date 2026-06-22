@@ -345,7 +345,9 @@ func (c *Collector) Collect(pathsConf PathsConf) (map[string]string, error) {
 				}
 			} else if entry.Type == "env" {
 				env := os.Getenv(name)
-				props[key] = env
+				if env != "" {
+					props[key] = env
+				}
 			} else {
 				return nil, fmt.Errorf("unknown env collector entry type: %s", entry.Type)
 			}
