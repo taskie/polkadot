@@ -632,6 +632,7 @@ func (g *Generator) appendDotGtp(w io.Writer, source DotSource, tagMap map[strin
 	if err != nil {
 		return err
 	}
+	tpl = tpl.Option("missingkey=zero")
 	err = tpl.Execute(w, tagMap)
 	if err != nil {
 		return err
