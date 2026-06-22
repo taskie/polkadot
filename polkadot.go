@@ -271,9 +271,13 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 				modeValue := int(modeInt)
 				mode = &modeValue
 			}
+			pat, err := regexp.Compile(v.Pat)
+			if err != nil {
+				return nil, fmt.Errorf("rules.yml: rule %q: invalid pattern %q: %w", k, v.Pat, err)
+			}
 			ruleConfMap[k] = WeaverRule{
 				Directories: v.Dirs,
-				Pattern:     regexp.MustCompile(v.Pat),
+				Pattern:     pat,
 				Mode:        mode,
 			}
 		}
