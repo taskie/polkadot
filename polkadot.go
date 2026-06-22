@@ -680,13 +680,8 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 
 	// mkdir -p
 	dir := filepath.Dir(outFilePath)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		// use FileMode of current dir
-		fi, err := os.Stat(filepath.Dir(os.Args[0]))
-		if err != nil {
-			return err
-		}
-		os.MkdirAll(dir, fi.Mode())
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
 	}
 
 	mode := 0644
