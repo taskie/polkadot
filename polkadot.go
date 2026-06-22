@@ -168,12 +168,12 @@ func (a *App) Execute() error {
 func (a *App) LoadEntry() (map[string]string, error) {
 	buf, err := os.ReadFile(a.entryPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read %s: %w", a.entryPath, err)
 	}
 	var props map[string]string
 	err = yaml.Unmarshal(buf, &props)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse %s: %w", a.entryPath, err)
 	}
 	for k, v := range props {
 		if v == "" {
@@ -193,16 +193,16 @@ func (a *App) Collect() (map[string]string, error) {
 		}
 		buf, err := os.ReadFile(confPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read %s: %w", confPath, err)
 		}
 		var pathsConf PathsConf
 		err = yaml.Unmarshal(buf, &pathsConf)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parse %s: %w", confPath, err)
 		}
 		subProps, err := collector.Collect(pathsConf)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("collect %s: %w", confPath, err)
 		}
 		for key, value := range subProps {
 			props[key] = value
@@ -220,12 +220,12 @@ func (a *App) LoadTags() (map[string]map[string]string, error) {
 		}
 		buf, err := os.ReadFile(confPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read %s: %w", confPath, err)
 		}
 		var tagConfMap map[string]map[string]string
 		err = yaml.Unmarshal(buf, &tagConfMap)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parse %s: %w", confPath, err)
 		}
 		for tag, children := range tagConfMap {
 			for k, v := range children {
@@ -248,12 +248,12 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 		}
 		buf, err := os.ReadFile(confPath)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read %s: %w", confPath, err)
 		}
 		var rulesConf RulesConf
 		err = yaml.Unmarshal(buf, &rulesConf)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("parse %s: %w", confPath, err)
 		}
 		for k, v := range rulesConf {
 			if v.Dir != "" {
@@ -263,7 +263,7 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 			if v.Mode != "" {
 				modeInt, err := strconv.ParseInt(v.Mode, 8, 32)
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("%s: rule %q: invalid mode %q: %w", confPath, k, v.Mode, err)
 				}
 				if modeInt < 0 || modeInt > 0777 {
 					return nil, fmt.Errorf("invalid mode: %s", v.Mode)
@@ -299,9 +299,8 @@ func (a *App) Expand() (map[string]string, map[string]string, error) {
 func (a *App) Generate() error {
 	generator := Generator{}
 	for _, entry := range a.dotEntries {
-		err := generator.Generate(entry, a.tagMap)
-		if err != nil {
-			return err
+		if err := generator.Generate(entry, a.tagMap); err != nil {
+			return fmt.Errorf("generate %s: %w", entry.Path(), err)
 		}
 	}
 	return nil
@@ -577,7 +576,7 @@ func (w *Weaver) Walk(baseDir string, tagMap map[string]string, ruleConf WeaverR
 			return nil
 		})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("walk %s: %w", baseDir, err)
 	}
 	return sourceMap, nil
 }
@@ -630,27 +629,25 @@ type Generator struct{}
 func (g *Generator) appendDotGtp(w io.Writer, source DotSource, tagMap map[string]string) error {
 	tpl, err := template.ParseFiles(source.Path)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse template %s: %w", source.Path, err)
 	}
 	tpl = tpl.Option("missingkey=zero")
-	err = tpl.Execute(w, tagMap)
-	if err != nil {
-		return err
+	if err := tpl.Execute(w, tagMap); err != nil {
+		return fmt.Errorf("execute template %s: %w", source.Path, err)
 	}
-	return err
+	return nil
 }
 
-func (g *Generator) appendDotText(w io.Writer, source DotSource, tagMap map[string]string) (err error) {
+func (g *Generator) appendDotText(w io.Writer, source DotSource, tagMap map[string]string) error {
 	inFile, err := os.Open(source.Path)
 	if err != nil {
-		return
+		return fmt.Errorf("open %s: %w", source.Path, err)
 	}
 	defer inFile.Close()
-	_, err = io.Copy(w, inFile)
-	if err != nil {
-		return
+	if _, err = io.Copy(w, inFile); err != nil {
+		return fmt.Errorf("copy %s: %w", source.Path, err)
 	}
-	return
+	return nil
 }
 
 func (g *Generator) appendDot(w io.Writer, source DotSource, tagMap map[string]string) error {
@@ -681,7 +678,7 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 	// mkdir -p
 	dir := filepath.Dir(outFilePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
 
 	mode := 0644
@@ -690,7 +687,7 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 	}
 	outFile, err := os.OpenFile(outFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(mode))
 	if err != nil {
-		return err
+		return fmt.Errorf("create %s: %w", outFilePath, err)
 	}
 	defer outFile.Close()
 
