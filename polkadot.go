@@ -187,7 +187,7 @@ func (a *App) Collect() (map[string]string, error) {
 	collector := Collector{}
 	props := make(map[string]string)
 	for _, dirPath := range a.polkaDirPaths {
-		confPath := dirPath + "/paths.yml"
+		confPath := filepath.Join(dirPath, "paths.yml")
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
@@ -214,7 +214,7 @@ func (a *App) Collect() (map[string]string, error) {
 func (a *App) LoadTags() (map[string]map[string]string, error) {
 	propsDef := make(map[string]map[string]string)
 	for _, dirPath := range a.polkaDirPaths {
-		confPath := dirPath + "/tags.yml"
+		confPath := filepath.Join(dirPath, "tags.yml")
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
@@ -242,7 +242,7 @@ func (a *App) LoadTags() (map[string]map[string]string, error) {
 func (a *App) LoadRules() (map[string]WeaverRule, error) {
 	ruleConfMap := make(map[string]WeaverRule)
 	for _, dirPath := range a.polkaDirPaths {
-		confPath := dirPath + "/rules.yml"
+		confPath := filepath.Join(dirPath, "rules.yml")
 		if _, err := os.Stat(confPath); err != nil {
 			continue
 		}
@@ -523,7 +523,7 @@ func (w *Weaver) Weave(polkaDirPaths []string, tagMap map[string]string, ruleCon
 		sourceArrayMap := make(map[string][]DotSource)
 		for _, dir := range ruleConf.Directories {
 			for _, rootDir := range polkaDirPaths {
-				baseDir := rootDir + dir
+				baseDir := filepath.Join(rootDir, dir)
 				sourceMap, err := w.Walk(baseDir, tagMap, ruleConf)
 				if err != nil {
 					return nil, err
