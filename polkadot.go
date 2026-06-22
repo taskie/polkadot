@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -331,7 +330,10 @@ func (c *Collector) Collect(pathsConf PathsConf) (map[string]string, error) {
 					props[key] = fullPath
 				}
 			} else if entry.Type == "file" || entry.Type == "dir" {
-				filePath := expandHome(entry.Path)
+				filePath, err := expandHome(entry.Path)
+				if err != nil {
+					return nil, err
+				}
 				if ft, err := os.Stat(filePath); err == nil {
 					valid := true
 					if entry.Type == "file" {
@@ -673,7 +675,10 @@ func (g *Generator) concatDots(w io.Writer, sources []DotSource, tagMap map[stri
 
 func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error {
 	// expand ~/
-	outFilePath := expandHome(dotEntry.Path())
+	outFilePath, err := expandHome(dotEntry.Path())
+	if err != nil {
+		return err
+	}
 
 	// mkdir -p
 	dir := filepath.Dir(outFilePath)
@@ -705,13 +710,15 @@ func stringInSlice(a string, list []string) bool {
 	return false
 }
 
-func expandHome(path string) string {
+func expandHome(path string) (string, error) {
 	if !strings.HasPrefix(path, "~/") {
-		return path
+		return path, nil
 	}
-	usr, _ := user.Current()
-	homedir := usr.HomeDir + "/"
-	return strings.Replace(path, "~/", homedir, 1)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("expand home: %w", err)
+	}
+	return filepath.Join(home, path[2:]), nil
 }
 
 func toBasenameWithoutExt(path string, recursive bool) (basename string) {
