@@ -341,14 +341,14 @@ func TestWeaver(t *testing.T) {
 }
 
 func TestGenerator(t *testing.T) {
-	g := Generator{}
+	g := Generator{NormalizeJoin: true}
 
 	t.Run("text/concatenation", func(t *testing.T) {
 		dir := t.TempDir()
 		p1 := filepath.Join(dir, "a.conf")
 		p2 := filepath.Join(dir, "b.conf")
-		os.WriteFile(p1, []byte("hello "), 0644)
-		os.WriteFile(p2, []byte("world"), 0644)
+		os.WriteFile(p1, []byte("aaa\n"), 0644)
+		os.WriteFile(p2, []byte("bbb\n"), 0644)
 
 		out := filepath.Join(dir, "out.conf")
 		entry := DotEntry{
@@ -362,8 +362,8 @@ func TestGenerator(t *testing.T) {
 			t.Fatal(err)
 		}
 		content, _ := os.ReadFile(out)
-		if string(content) != "hello world" {
-			t.Errorf("got %q, want %q", string(content), "hello world")
+		if string(content) != "aaa\n\nbbb\n" {
+			t.Errorf("got %q, want %q", string(content), "aaa\n\nbbb\n")
 		}
 	})
 
@@ -383,8 +383,103 @@ func TestGenerator(t *testing.T) {
 			t.Fatal(err)
 		}
 		content, _ := os.ReadFile(out)
-		if string(content) != "home=/home/user" {
-			t.Errorf("got %q, want %q", string(content), "home=/home/user")
+		if string(content) != "home=/home/user\n" {
+			t.Errorf("got %q, want %q", string(content), "home=/home/user\n")
+		}
+	})
+
+	t.Run("normalize_join/strips_extra_newlines", func(t *testing.T) {
+		dir := t.TempDir()
+		p1 := filepath.Join(dir, "a.conf")
+		p2 := filepath.Join(dir, "b.conf")
+		os.WriteFile(p1, []byte("aaa\n\n\n"), 0644)
+		os.WriteFile(p2, []byte("bbb"), 0644)
+
+		out := filepath.Join(dir, "out.conf")
+		entry := DotEntry{
+			Sources: []DotSource{
+				{Name: "a.conf", Path: p1, Tags: []string{}},
+				{Name: "b.conf", Path: p2, Tags: []string{}},
+			},
+			Target: DotTarget{Path: out},
+		}
+		gn := Generator{NormalizeJoin: true}
+		if err := gn.Generate(entry, nil); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := os.ReadFile(out)
+		if string(content) != "aaa\n\nbbb\n" {
+			t.Errorf("got %q, want %q", string(content), "aaa\n\nbbb\n")
+		}
+	})
+
+	t.Run("normalize_join/adds_missing_newline", func(t *testing.T) {
+		dir := t.TempDir()
+		p1 := filepath.Join(dir, "a.conf")
+		p2 := filepath.Join(dir, "b.conf")
+		os.WriteFile(p1, []byte("aaa"), 0644)
+		os.WriteFile(p2, []byte("bbb"), 0644)
+
+		out := filepath.Join(dir, "out.conf")
+		entry := DotEntry{
+			Sources: []DotSource{
+				{Name: "a.conf", Path: p1, Tags: []string{}},
+				{Name: "b.conf", Path: p2, Tags: []string{}},
+			},
+			Target: DotTarget{Path: out},
+		}
+		gn := Generator{NormalizeJoin: true}
+		if err := gn.Generate(entry, nil); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := os.ReadFile(out)
+		if string(content) != "aaa\n\nbbb\n" {
+			t.Errorf("got %q, want %q", string(content), "aaa\n\nbbb\n")
+		}
+	})
+
+	t.Run("normalize_join/collapses_excess_newlines", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "a.conf")
+		os.WriteFile(p, []byte("aaa\n\n\nbbb"), 0644)
+
+		out := filepath.Join(dir, "out.conf")
+		entry := DotEntry{
+			Sources: []DotSource{{Name: "a.conf", Path: p, Tags: []string{}}},
+			Target:  DotTarget{Path: out},
+		}
+		gn := Generator{NormalizeJoin: true}
+		if err := gn.Generate(entry, nil); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := os.ReadFile(out)
+		if string(content) != "aaa\n\nbbb\n" {
+			t.Errorf("got %q, want %q", string(content), "aaa\n\nbbb\n")
+		}
+	})
+
+	t.Run("normalize_join/raw_preserves_content", func(t *testing.T) {
+		dir := t.TempDir()
+		p1 := filepath.Join(dir, "a.conf")
+		p2 := filepath.Join(dir, "b.conf")
+		os.WriteFile(p1, []byte("aaa\n\n"), 0644)
+		os.WriteFile(p2, []byte("bbb"), 0644)
+
+		out := filepath.Join(dir, "out.conf")
+		entry := DotEntry{
+			Sources: []DotSource{
+				{Name: "a.conf", Path: p1, Tags: []string{}},
+				{Name: "b.conf", Path: p2, Tags: []string{}},
+			},
+			Target: DotTarget{Path: out},
+		}
+		gr := Generator{NormalizeJoin: false}
+		if err := gr.Generate(entry, nil); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := os.ReadFile(out)
+		if string(content) != "aaa\n\nbbb" {
+			t.Errorf("got %q, want %q", string(content), "aaa\n\nbbb")
 		}
 	})
 
@@ -404,8 +499,8 @@ func TestGenerator(t *testing.T) {
 			t.Fatal(err)
 		}
 		content, _ := os.ReadFile(out)
-		if string(content) != "val=" {
-			t.Errorf("got %q, want %q", string(content), "val=")
+		if string(content) != "val=\n" {
+			t.Errorf("got %q, want %q", string(content), "val=\n")
 		}
 	})
 }

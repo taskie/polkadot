@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"container/list"
 	"flag"
@@ -33,6 +34,7 @@ func main() {
 
 func run() error {
 	dryRunFlag := flag.Bool("n", false, "performs a trial run")
+	rawFlag := flag.Bool("raw", false, "concatenate files without normalizing newlines")
 	versionFlag := flag.Bool("V", false, "shows version info")
 	flag.Parse()
 	if *versionFlag {
@@ -50,6 +52,7 @@ func run() error {
 		dotfilesDirPath: pwd,
 		entryPath:       "entry.yml",
 		polkaDirPaths:   polkaDirPaths,
+		rawConcat:       *rawFlag,
 	}
 
 	color.New(color.FgCyan, color.Bold).Println("* Preparing...")
@@ -86,6 +89,7 @@ type App struct {
 	// Weave
 	dotEntries []DotEntry
 	// Generate
+	rawConcat bool
 }
 
 func (a *App) Prepare() error {
@@ -296,7 +300,7 @@ func (a *App) Expand() (map[string]string, map[string]string, error) {
 }
 
 func (a *App) Generate() error {
-	generator := Generator{}
+	generator := Generator{NormalizeJoin: !a.rawConcat}
 	for _, entry := range a.dotEntries {
 		if err := generator.Generate(entry, a.tagMap); err != nil {
 			return fmt.Errorf("generate %s: %w", entry.Path(), err)
@@ -626,7 +630,11 @@ func dotMapsToEntries(sourcesMap map[string][]DotSource, targetMap map[string]Do
 
 // Generate
 
-type Generator struct{}
+var excessNewlines = regexp.MustCompile(`\n{3,}`)
+
+type Generator struct {
+	NormalizeJoin bool
+}
 
 func (g *Generator) appendDotGtp(w io.Writer, source DotSource, tagMap map[string]string) error {
 	tpl, err := template.ParseFiles(source.Path)
@@ -663,14 +671,30 @@ func (g *Generator) appendDot(w io.Writer, source DotSource, tagMap map[string]s
 }
 
 func (g *Generator) concatDots(w io.Writer, sources []DotSource, tagMap map[string]string) error {
-	var err error = nil
-	for _, source := range sources {
-		err = g.appendDot(w, source, tagMap)
-		if err != nil {
+	for i, source := range sources {
+		if !g.NormalizeJoin {
+			if err := g.appendDot(w, source, tagMap); err != nil {
+				return err
+			}
+			continue
+		}
+		var buf bytes.Buffer
+		if err := g.appendDot(&buf, source, tagMap); err != nil {
+			return err
+		}
+		content := bytes.TrimRight(buf.Bytes(), "\n")
+		if _, err := w.Write(content); err != nil {
+			return err
+		}
+		sep := "\n\n"
+		if i == len(sources)-1 {
+			sep = "\n"
+		}
+		if _, err := io.WriteString(w, sep); err != nil {
 			return err
 		}
 	}
-	return err
+	return nil
 }
 
 func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error {
@@ -690,13 +714,23 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 	if dotEntry.Target.Mode != nil {
 		mode = *dotEntry.Target.Mode
 	}
+	var buf bytes.Buffer
+	if err := g.concatDots(&buf, dotEntry.Sources, tagMap); err != nil {
+		return err
+	}
+	content := buf.Bytes()
+	if g.NormalizeJoin {
+		content = excessNewlines.ReplaceAll(content, []byte("\n\n"))
+	}
+
 	outFile, err := os.OpenFile(outFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(mode))
 	if err != nil {
 		return fmt.Errorf("create %s: %w", outFilePath, err)
 	}
 	defer outFile.Close()
 
-	return g.concatDots(outFile, dotEntry.Sources, tagMap)
+	_, err = outFile.Write(content)
+	return err
 }
 
 // Utils
