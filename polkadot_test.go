@@ -1056,3 +1056,102 @@ func TestLoadYAML(t *testing.T) {
 		}
 	})
 }
+
+func TestApp(t *testing.T) {
+	t.Run("rule_without_sources_keeps_existing_file", func(t *testing.T) {
+		root := t.TempDir()
+		comp := filepath.Join(root, "common")
+		os.MkdirAll(filepath.Join(comp, "bash"), 0755)
+		os.WriteFile(filepath.Join(comp, "bash", "00_linux.sh"), []byte("linux\n"), 0644)
+		gated := filepath.Join(root, "gated")
+		missing := filepath.Join(root, "missing")
+		written := filepath.Join(root, "written")
+		os.WriteFile(gated, []byte("keep gated\n"), 0644)
+		os.WriteFile(missing, []byte("keep missing\n"), 0644)
+		os.WriteFile(filepath.Join(comp, "rules.yml"), []byte(
+			gated+":\n  dir: bash\n  pat: \\.sh$\n"+
+				missing+":\n  dir: nonexistent\n  pat: \\.sh$\n"+
+				written+":\n  dir: bash\n  pat: ^00_\n"), 0644)
+		os.WriteFile(filepath.Join(root, "entry.yml"), []byte("arch:\n"), 0644)
+
+		// The linux tag is not declared, so every *_linux fragment is gated off.
+		app := App{
+			dotfilesDirPath: root,
+			entries:         []EntrySpec{{Path: filepath.Join(root, "entry.yml")}},
+			polkaDirPaths:   []string{comp},
+		}
+		if err := app.Prepare(); err != nil {
+			t.Fatal(err)
+		}
+		if len(app.dotEntries) != 0 {
+			t.Errorf("dotEntries = %v, want none", app.dotEntries)
+		}
+		if err := app.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		for path, want := range map[string]string{gated: "keep gated\n", missing: "keep missing\n"} {
+			if got, _ := os.ReadFile(path); string(got) != want {
+				t.Errorf("%s = %q, want %q", path, got, want)
+			}
+		}
+		if _, err := os.Stat(written); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s should not be created, stat err = %v", written, err)
+		}
+	})
+
+	t.Run("rule_with_sources_is_generated", func(t *testing.T) {
+		root := t.TempDir()
+		comp := filepath.Join(root, "common")
+		os.MkdirAll(filepath.Join(comp, "bash"), 0755)
+		os.WriteFile(filepath.Join(comp, "bash", "00_linux.sh"), []byte("linux\n"), 0644)
+		out := filepath.Join(root, "out")
+		os.WriteFile(filepath.Join(comp, "rules.yml"), []byte(out+":\n  dir: bash\n  pat: \\.sh$\n"), 0644)
+		os.WriteFile(filepath.Join(root, "entry.yml"), []byte("linux:\n"), 0644)
+
+		app := App{
+			dotfilesDirPath: root,
+			entries:         []EntrySpec{{Path: filepath.Join(root, "entry.yml")}},
+			polkaDirPaths:   []string{comp},
+		}
+		if err := app.Prepare(); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := os.ReadFile(out); string(got) != "linux\n" {
+			t.Errorf("out = %q, want %q", got, "linux\n")
+		}
+	})
+}
+
+func TestCheckComponents(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "entry.yml")
+	os.WriteFile(file, []byte("linux:\n"), 0644)
+
+	for _, c := range []struct {
+		name    string
+		paths   []string
+		wantErr string
+	}{
+		{"ok", []string{dir}, ""},
+		{"none", nil, ""},
+		{"file", []string{dir, file}, "component dir " + file + ": not a directory"},
+		{"missing", []string{filepath.Join(dir, "nope")}, "component dir " + filepath.Join(dir, "nope") + ": not found"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			app := App{polkaDirPaths: c.paths}
+			err := app.CheckComponents()
+			if c.wantErr == "" {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != c.wantErr {
+				t.Errorf("err = %v, want %q", err, c.wantErr)
+			}
+		})
+	}
+}

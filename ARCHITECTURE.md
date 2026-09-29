@@ -119,6 +119,9 @@ paths.yml ──►  Collect (probe the system: exec/file/dir/env)
 
 ### 1. Load (`LoadEntry`, `LoadTags`, `LoadRules`)
 
+`CheckComponents` first verifies that every component path exists and is a
+directory; a missing or non-directory component is an error.
+
 - **entry files** (`entry.yml` in the dotfiles root, or the `entries` list of
   `polkadot.yml`) — each a flat `map[string]string` of the tags this machine
   should activate. A missing file is an error unless marked `optional`, in
@@ -176,6 +179,9 @@ configured subdirectory, keeping files whose name matches the rule's regexp.
   de-duplicated by path (`mergeSourceArrayMap` / `removeDuplicatedDotSource`).
 - Output is a sorted `[]DotEntry`, each pairing a `DotTarget` (output path +
   mode) with its ordered `[]DotSource`. Sorting makes the build deterministic.
+- `Prepare` drops entries with no sources (every fragment gated off, or the
+  rule's directories missing) and reports each as `info: <path>: no sources,
+  skipped` on stderr, so an existing file is never replaced with an empty one.
 
 ### 5. Generate (`Generator`)
 
@@ -218,4 +224,5 @@ declaration.
 - **Fail fast, quiet by default.** Errors bubble up to `main()`, which prints a
   red "Failed" with the error to stderr and exits non-zero. stdout carries only
   the result (target files, plus their sources with `-v`); colored status
-  headers and the resolved tag maps go to stderr and only with `-v`.
+  headers and the resolved tag maps go to stderr and only with `-v`. `info:`
+  messages (e.g. skipped rules) go to stderr regardless of `-v`.

@@ -41,7 +41,8 @@ func getVersion() string {
 
 // Output policy: stdout carries the result (the list of target files, plus
 // their sources with -v); stderr carries status headers and debug logs, which
-// are shown only with -v, except for the dry-run notice and errors.
+// are shown only with -v, except for info messages, the dry-run notice and
+// errors.
 
 func main() {
 	err := run()
@@ -241,6 +242,12 @@ func (a *App) logf(format string, v ...any) {
 	}
 }
 
+// infof writes an informational message to stderr regardless of verbosity.
+func (a *App) infof(format string, v ...any) {
+	color.New(color.FgCyan).Fprint(os.Stderr, "info: ")
+	fmt.Fprintf(os.Stderr, format, v...)
+}
+
 // status writes a colored status header to stderr only in verbose mode.
 func (a *App) status(attr color.Attribute, msg string) {
 	if a.verbose {
@@ -255,6 +262,10 @@ func (a *App) Prepare() error {
 	a.logf("dotfiles dir: %s\n", a.dotfilesDirPath)
 	a.logf("entry files: %+v\n", a.entries)
 	a.logf("component dirs: %+v\n", a.polkaDirPaths)
+
+	if err := a.CheckComponents(); err != nil {
+		return err
+	}
 
 	entryTags, err := a.LoadEntry()
 	if err != nil {
@@ -299,9 +310,19 @@ func (a *App) Prepare() error {
 	a.logf("resolved tags: %+v\n", tagMap)
 	a.tagMap = tagMap
 
-	dotEntries, err := a.Weave()
+	wovenEntries, err := a.Weave()
 	if err != nil {
 		return err
+	}
+	// A rule without sources is skipped so that it never empties an existing
+	// file (e.g. a host-specific fragment that is gated off on this machine).
+	dotEntries := make([]DotEntry, 0, len(wovenEntries))
+	for _, entry := range wovenEntries {
+		if len(entry.Sources) == 0 {
+			a.infof("%s: no sources, skipped\n", entry.Path())
+			continue
+		}
+		dotEntries = append(dotEntries, entry)
 	}
 	for _, entry := range dotEntries {
 		if entry.Target.Mode != nil {
@@ -328,6 +349,25 @@ func (a *App) Execute() error {
 }
 
 // Application tasks
+
+// CheckComponents verifies that every component path is an existing directory,
+// so a typo or a file passed by mistake fails with a clear message instead of
+// being silently ignored.
+func (a *App) CheckComponents() error {
+	for _, dirPath := range a.polkaDirPaths {
+		fi, err := os.Stat(dirPath)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("component dir %s: not found", dirPath)
+		}
+		if err != nil {
+			return fmt.Errorf("component dir %s: %w", dirPath, err)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("component dir %s: not a directory", dirPath)
+		}
+	}
+	return nil
+}
 
 func (a *App) LoadEntry() (map[string]string, error) {
 	props := make(map[string]string)
