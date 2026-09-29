@@ -255,6 +255,57 @@ func TestCollector(t *testing.T) {
 			t.Error("expected key to be absent for missing binary")
 		}
 	})
+
+	t.Run("order/first_resolving_candidate_wins", func(t *testing.T) {
+		t.Setenv("POLKADOT_TEST_SK", "sk")
+		t.Setenv("POLKADOT_TEST_FZF", "fzf")
+		props, err := c.Collect(PathsConf{
+			"fzf": []CollectorEntry{
+				{Type: "env", Name: "POLKADOT_TEST_SK"},
+				{Type: "env", Name: "POLKADOT_TEST_FZF"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if props["fzf"] != "sk" {
+			t.Errorf("fzf = %q, want %q", props["fzf"], "sk")
+		}
+	})
+
+	t.Run("order/falls_through_unresolved_candidates", func(t *testing.T) {
+		t.Setenv("POLKADOT_TEST_FZF", "fzf")
+		props, err := c.Collect(PathsConf{
+			"fzf": []CollectorEntry{
+				{Type: "env", Name: "POLKADOT_TEST_NEVER_SET_XYZABC"},
+				{Type: "exec", Name: "polkadot-no-such-command"},
+				{Type: "dir", Path: "/nonexistent/dir"},
+				{Type: "env", Name: "POLKADOT_TEST_FZF"},
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if props["fzf"] != "fzf" {
+			t.Errorf("fzf = %q, want %q", props["fzf"], "fzf")
+		}
+	})
+
+	t.Run("order/resolved_candidate_stops_evaluation", func(t *testing.T) {
+		t.Setenv("POLKADOT_TEST_SK", "sk")
+		props, err := c.Collect(PathsConf{
+			"fzf": []CollectorEntry{
+				{Type: "env", Name: "POLKADOT_TEST_SK"},
+				{Type: "bogus"}, // never reached
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if props["fzf"] != "sk" {
+			t.Errorf("fzf = %q, want %q", props["fzf"], "sk")
+		}
+	})
 }
 
 func TestWeaver(t *testing.T) {

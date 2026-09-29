@@ -509,48 +509,53 @@ func (pc PathsConf) Validate() error {
 	return nil
 }
 
+// Collect resolves each tag from its candidates in order; the first candidate
+// that resolves wins, and a tag with no resolving candidate is left unset.
 func (c *Collector) Collect(pathsConf PathsConf) (map[string]string, error) {
 	props := make(map[string]string)
 	for key, entries := range pathsConf {
 		for _, entry := range entries {
-			name := key
-			if entry.Name != "" {
-				name = entry.Name
+			value, ok, err := c.resolve(key, entry)
+			if err != nil {
+				return nil, fmt.Errorf("tag %q: %w", key, err)
 			}
-			if entry.Type == "exec" {
-				if fullPath, err := exec.LookPath(name); err == nil {
-					props[key] = fullPath
-				}
-			} else if entry.Type == "file" || entry.Type == "dir" {
-				filePath, err := expandHome(entry.Path)
-				if err != nil {
-					return nil, err
-				}
-				if ft, err := os.Stat(filePath); err == nil {
-					valid := true
-					if entry.Type == "file" {
-						valid = valid && !ft.IsDir()
-					}
-					if entry.Type == "dir" {
-						valid = valid && ft.IsDir()
-					}
-					if valid {
-						if fullPath, err := filepath.Abs(filePath); err == nil {
-							props[key] = fullPath
-						}
-					}
-				}
-			} else if entry.Type == "env" {
-				env := os.Getenv(name)
-				if env != "" {
-					props[key] = env
-				}
-			} else {
-				return nil, fmt.Errorf("unknown collector entry type: %s", entry.Type)
+			if ok {
+				props[key] = value
+				break
 			}
 		}
 	}
 	return props, nil
+}
+
+func (c *Collector) resolve(key string, entry CollectorEntry) (string, bool, error) {
+	name := key
+	if entry.Name != "" {
+		name = entry.Name
+	}
+	switch entry.Type {
+	case "exec":
+		if fullPath, err := exec.LookPath(name); err == nil {
+			return fullPath, true, nil
+		}
+	case "file", "dir":
+		filePath, err := expandHome(entry.Path)
+		if err != nil {
+			return "", false, err
+		}
+		if fi, err := os.Stat(filePath); err == nil && fi.IsDir() == (entry.Type == "dir") {
+			if fullPath, err := filepath.Abs(filePath); err == nil {
+				return fullPath, true, nil
+			}
+		}
+	case "env":
+		if env := os.Getenv(name); env != "" {
+			return env, true, nil
+		}
+	default:
+		return "", false, fmt.Errorf("unknown collector entry type: %s", entry.Type)
+	}
+	return "", false, nil
 }
 
 // Expand
