@@ -70,6 +70,11 @@ raw: false      # same as -raw
 Unknown keys are rejected (`Decoder.KnownFields(true)`, plus a manual key check
 in `EntrySpec.UnmarshalYAML`, which `KnownFields` does not reach) to catch typos.
 
+All YAML files are decoded through `decodeYAML`, which rejects unknown struct
+fields and duplicate keys. `rules.yml` additionally requires `dir`/`dirs` and
+`pat` per rule; `paths.yml` requires a known `type` and a `path` for
+`file`/`dir` candidates (`PathsConf.Validate`).
+
 ## Core data model
 
 Everything funnels into one **tag map** (`map[string]string`): tag name → value

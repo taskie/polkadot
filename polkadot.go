@@ -152,10 +152,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var config Config
-	decoder := yaml.NewDecoder(bytes.NewReader(buf))
-	decoder.KnownFields(true)
-	err = decoder.Decode(&config)
-	if err != nil && !errors.Is(err, io.EOF) { // io.EOF: empty file
+	err = decodeYAML(buf, &config)
+	if err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if config.Entries == nil {
@@ -349,7 +347,7 @@ func (a *App) LoadEntry() (map[string]string, error) {
 			return nil, fmt.Errorf("read %s: %w", entryPath, err)
 		}
 		var subProps map[string]string
-		err = yaml.Unmarshal(buf, &subProps)
+		err = decodeYAML(buf, &subProps)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", entryPath, err)
 		}
@@ -381,9 +379,12 @@ func (a *App) Collect() (map[string]string, error) {
 			return nil, fmt.Errorf("read %s: %w", confPath, err)
 		}
 		var pathsConf PathsConf
-		err = yaml.Unmarshal(buf, &pathsConf)
+		err = decodeYAML(buf, &pathsConf)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", confPath, err)
+		}
+		if err := pathsConf.Validate(); err != nil {
+			return nil, fmt.Errorf("%s: %w", confPath, err)
 		}
 		subProps, err := collector.Collect(pathsConf)
 		if err != nil {
@@ -408,7 +409,7 @@ func (a *App) LoadTags() (map[string]map[string]string, error) {
 			return nil, fmt.Errorf("read %s: %w", confPath, err)
 		}
 		var tagConfMap map[string]map[string]string
-		err = yaml.Unmarshal(buf, &tagConfMap)
+		err = decodeYAML(buf, &tagConfMap)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", confPath, err)
 		}
@@ -436,11 +437,17 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 			return nil, fmt.Errorf("read %s: %w", confPath, err)
 		}
 		var rulesConf RulesConf
-		err = yaml.Unmarshal(buf, &rulesConf)
+		err = decodeYAML(buf, &rulesConf)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", confPath, err)
 		}
 		for k, v := range rulesConf {
+			if v.Dir == "" && len(v.Dirs) == 0 {
+				return nil, fmt.Errorf("%s: rule %q: dir or dirs is required", confPath, k)
+			}
+			if v.Pat == "" {
+				return nil, fmt.Errorf("%s: rule %q: pat is required", confPath, k)
+			}
 			if v.Dir != "" {
 				v.Dirs = append(v.Dirs, v.Dir)
 			}
@@ -451,14 +458,14 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 					return nil, fmt.Errorf("%s: rule %q: invalid mode %q: %w", confPath, k, v.Mode, err)
 				}
 				if modeInt < 0 || modeInt > 0777 {
-					return nil, fmt.Errorf("invalid mode: %s", v.Mode)
+					return nil, fmt.Errorf("%s: rule %q: mode %q out of range 0-777", confPath, k, v.Mode)
 				}
 				modeValue := int(modeInt)
 				mode = &modeValue
 			}
 			pat, err := regexp.Compile(v.Pat)
 			if err != nil {
-				return nil, fmt.Errorf("rules.yml: rule %q: invalid pattern %q: %w", k, v.Pat, err)
+				return nil, fmt.Errorf("%s: rule %q: invalid pattern %q: %w", confPath, k, v.Pat, err)
 			}
 			ruleConfMap[k] = WeaverRule{
 				Directories: v.Dirs,
@@ -498,9 +505,30 @@ type PathsConf map[string][]CollectorEntry
 type Collector struct{}
 
 type CollectorEntry struct {
-	Type string
-	Name string
-	Path string
+	Type string `yaml:"type"`
+	Name string `yaml:"name"`
+	Path string `yaml:"path"`
+}
+
+// Validate checks that every candidate has a known type and that file/dir
+// candidates have a path.
+func (pc PathsConf) Validate() error {
+	for key, entries := range pc {
+		for i, entry := range entries {
+			switch entry.Type {
+			case "exec", "env":
+			case "file", "dir":
+				if entry.Path == "" {
+					return fmt.Errorf("tag %q: candidate %d: type %q requires path", key, i, entry.Type)
+				}
+			case "":
+				return fmt.Errorf("tag %q: candidate %d: type is required", key, i)
+			default:
+				return fmt.Errorf("tag %q: candidate %d: unknown type %q", key, i, entry.Type)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Collector) Collect(pathsConf PathsConf) (map[string]string, error) {
@@ -540,7 +568,7 @@ func (c *Collector) Collect(pathsConf PathsConf) (map[string]string, error) {
 					props[key] = env
 				}
 			} else {
-				return nil, fmt.Errorf("unknown env collector entry type: %s", entry.Type)
+				return nil, fmt.Errorf("unknown collector entry type: %s", entry.Type)
 			}
 		}
 	}
@@ -671,10 +699,10 @@ type RulesConf map[string]WeaverEntry
 type Weaver struct{}
 
 type WeaverEntry struct {
-	Dir  string
-	Dirs []string
-	Pat  string
-	Mode string
+	Dir  string   `yaml:"dir"`
+	Dirs []string `yaml:"dirs"`
+	Pat  string   `yaml:"pat"`
+	Mode string   `yaml:"mode"`
 }
 
 type WeaverRule struct {
@@ -947,6 +975,17 @@ func writeFileAtomic(path string, content []byte, mode os.FileMode) (err error) 
 }
 
 // Utils
+
+// decodeYAML decodes a YAML document strictly: unknown struct fields and
+// duplicate keys are errors. An empty document decodes to the zero value.
+func decodeYAML(buf []byte, v any) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(buf))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(v); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
 
 func expandHome(path string) (string, error) {
 	if !strings.HasPrefix(path, "~/") {

@@ -840,3 +840,100 @@ func TestWriteFileAtomic(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadRulesValidation(t *testing.T) {
+	load := func(t *testing.T, content string) (map[string]WeaverRule, error) {
+		t.Helper()
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "rules.yml"), []byte(content), 0644)
+		app := App{polkaDirPaths: []string{dir}}
+		return app.LoadRules()
+	}
+
+	t.Run("accepts_valid_rules", func(t *testing.T) {
+		rules, err := load(t, `
+'distribute/.bashrc':
+  dirs: ['sh.d', 'bash.d']
+  pat: '\.(?:ba)?sh$'
+'distribute/.local/bin/findup':
+  dir: 'bin'
+  pat: '^findup$'
+  mode: 755
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode := rules["distribute/.local/bin/findup"].Mode; mode == nil || *mode != 0755 {
+			t.Errorf("mode = %v, want 0755", mode)
+		}
+	})
+
+	for _, c := range []struct{ name, content string }{
+		{"unknown_field", "~/.x:\n  dir: d\n  pattern: x\n"},
+		{"missing_dir", "~/.x:\n  pat: x\n"},
+		{"missing_pat", "~/.x:\n  dir: d\n"},
+		{"mode_out_of_range", "~/.x:\n  dir: d\n  pat: x\n  mode: 1000\n"},
+		{"invalid_pattern", "~/.x:\n  dir: d\n  pat: '('\n"},
+		{"duplicate_key", "~/.x:\n  dir: d\n  pat: x\n~/.x:\n  dir: e\n  pat: y\n"},
+	} {
+		t.Run("rejects_"+c.name, func(t *testing.T) {
+			if _, err := load(t, c.content); err == nil {
+				t.Errorf("expected error for %q", c.content)
+			}
+		})
+	}
+}
+
+func TestLoadPathsValidation(t *testing.T) {
+	collect := func(t *testing.T, content string) (map[string]string, error) {
+		t.Helper()
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "paths.yml"), []byte(content), 0644)
+		app := App{polkaDirPaths: []string{dir}}
+		return app.Collect()
+	}
+
+	t.Run("accepts_valid_paths", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		os.Mkdir(filepath.Join(home, ".cargo"), 0755)
+		t.Setenv("POLKADOT_TEST_ENV", "value")
+
+		props, err := collect(t, `
+cargo:
+  - type: dir
+    path: ~/.cargo
+fzf:
+  - type: exec
+    name: polkadot-no-such-command
+myenv:
+  - type: env
+    name: POLKADOT_TEST_ENV
+nothing:
+`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{
+			"cargo": filepath.Join(home, ".cargo"),
+			"myenv": "value",
+		}
+		if !reflect.DeepEqual(props, want) {
+			t.Errorf("props = %v, want %v", props, want)
+		}
+	})
+
+	for _, c := range []struct{ name, content string }{
+		{"unknown_field", "x:\n  - type: exec\n    nmae: y\n"},
+		{"missing_type", "x:\n  - name: y\n"},
+		{"unknown_type", "x:\n  - type: command\n"},
+		{"dir_without_path", "x:\n  - type: dir\n"},
+		{"file_without_path", "x:\n  - type: file\n"},
+	} {
+		t.Run("rejects_"+c.name, func(t *testing.T) {
+			if _, err := collect(t, c.content); err == nil {
+				t.Errorf("expected error for %q", c.content)
+			}
+		})
+	}
+}
