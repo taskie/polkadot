@@ -261,6 +261,32 @@ func TestWeaver(t *testing.T) {
 	anyPat := regexp.MustCompile(`.*`)
 	w := Weaver{}
 
+	t.Run("walk/missing_base_dir_is_skipped", func(t *testing.T) {
+		sourceMap, err := w.Walk(filepath.Join(t.TempDir(), "nope"), map[string]string{}, WeaverRule{Pattern: anyPat})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sourceMap) != 0 {
+			t.Errorf("sourceMap = %v, want empty", sourceMap)
+		}
+	})
+
+	t.Run("walk/unreadable_subdir_is_error", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("permissions are not enforced for root")
+		}
+		dir := t.TempDir()
+		sub := filepath.Join(dir, "sub")
+		os.Mkdir(sub, 0755)
+		os.WriteFile(filepath.Join(sub, "a.conf"), []byte("a"), 0644)
+		os.Chmod(sub, 0)
+		t.Cleanup(func() { os.Chmod(sub, 0755) })
+
+		if _, err := w.Walk(dir, map[string]string{}, WeaverRule{Pattern: anyPat}); err == nil {
+			t.Error("expected error for unreadable subdirectory")
+		}
+	})
+
 	t.Run("tag_gating/accepts_matching", func(t *testing.T) {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, "config_linux.conf"), []byte("content"), 0644)

@@ -747,7 +747,11 @@ func (w *Weaver) Walk(baseDir string, tagMap map[string]string, ruleConf WeaverR
 		baseDir,
 		func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				return nil
+				// A component does not need to have every rule's directory.
+				if path == baseDir && errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
 			}
 			if d.IsDir() {
 				return nil
