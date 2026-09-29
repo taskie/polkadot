@@ -762,7 +762,7 @@ func (g *Generator) appendDotText(w io.Writer, source DotSource, tagMap map[stri
 
 func (g *Generator) appendDot(w io.Writer, source DotSource, tagMap map[string]string) error {
 	var err error = nil
-	if stringInSlice("gtp", source.Tags) {
+	if slices.Contains(source.Tags, "gtp") {
 		err = g.appendDotGtp(w, source, tagMap)
 	} else {
 		err = g.appendDotText(w, source, tagMap)
@@ -834,15 +834,6 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 }
 
 // Utils
-
-func stringInSlice(a string, list []string) bool {
-	for _, b := range list {
-		if b == a {
-			return true
-		}
-	}
-	return false
-}
 
 func expandHome(path string) (string, error) {
 	if !strings.HasPrefix(path, "~/") {
