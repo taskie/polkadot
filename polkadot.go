@@ -21,7 +21,7 @@ import (
 	"text/template"
 
 	"github.com/fatih/color"
-	"gopkg.in/yaml.v2"
+	"go.yaml.in/yaml/v3"
 )
 
 // version is injected at build time via -ldflags "-X main.version=...".
@@ -118,18 +118,28 @@ type EntrySpec struct {
 	Optional bool   `yaml:"optional"`
 }
 
-func (e *EntrySpec) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var path string
-	if err := unmarshal(&path); err == nil {
-		*e = EntrySpec{Path: path}
-	} else {
+func (e *EntrySpec) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		*e = EntrySpec{Path: node.Value}
+	case yaml.MappingNode:
+		// node.Decode does not inherit KnownFields, so check keys here.
+		for i := 0; i < len(node.Content); i += 2 {
+			switch key := node.Content[i].Value; key {
+			case "path", "optional":
+			default:
+				return fmt.Errorf("line %d: unknown entry field %q", node.Content[i].Line, key)
+			}
+		}
 		type plain EntrySpec
-		if err := unmarshal((*plain)(e)); err != nil {
+		if err := node.Decode((*plain)(e)); err != nil {
 			return err
 		}
+	default:
+		return fmt.Errorf("line %d: entry must be a path or {path, optional}", node.Line)
 	}
 	if e.Path == "" {
-		return fmt.Errorf("entry path must not be empty")
+		return fmt.Errorf("line %d: entry path must not be empty", node.Line)
 	}
 	return nil
 }
@@ -142,8 +152,10 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	var config Config
-	err = yaml.UnmarshalStrict(buf, &config)
-	if err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(buf))
+	decoder.KnownFields(true)
+	err = decoder.Decode(&config)
+	if err != nil && !errors.Is(err, io.EOF) { // io.EOF: empty file
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if config.Entries == nil {

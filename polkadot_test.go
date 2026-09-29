@@ -623,6 +623,7 @@ func TestNewApp(t *testing.T) {
 			"entries: [{path: a.yml, optinal: true}]\n",
 			"entries: [{optional: true}]\n",
 			"entries: [\"\"]\n",
+			"entries: [[a.yml]]\n",
 		} {
 			pwd := t.TempDir()
 			writeFile(t, filepath.Join(pwd, "polkadot.yml"), content)
@@ -630,6 +631,19 @@ func TestNewApp(t *testing.T) {
 			if _, err := NewApp(pwd, "", nil, nil); err == nil {
 				t.Errorf("expected error for %q", content)
 			}
+		}
+	})
+
+	t.Run("empty_config_file", func(t *testing.T) {
+		pwd := t.TempDir()
+		writeFile(t, filepath.Join(pwd, "polkadot.yml"), "")
+
+		app, err := NewApp(pwd, "", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []EntrySpec{{Path: filepath.Join(pwd, "entry.yml")}}; !reflect.DeepEqual(app.entries, want) {
+			t.Errorf("entries = %v, want %v", app.entries, want)
 		}
 	})
 

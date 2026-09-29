@@ -15,7 +15,7 @@ single `App` struct.
 ## At a glance
 
 - **Language / module:** Go (`module github.com/taskie/polkadot`, Go 1.21).
-- **Dependencies:** `gopkg.in/yaml.v2` (config parsing), `github.com/fatih/color`
+- **Dependencies:** `go.yaml.in/yaml/v3` (config parsing), `github.com/fatih/color`
   (colored progress output). Everything else is the standard library.
 - **Entry point:** `main()` → `run()` in `polkadot.go`.
 - **Release:** GoReleaser (`.goreleaser.yml`) builds static (`CGO_ENABLED=0`)
@@ -67,7 +67,8 @@ components:     # component dirs, in override order
 raw: false      # same as -raw
 ```
 
-Unknown keys are rejected (`yaml.UnmarshalStrict`) to catch typos.
+Unknown keys are rejected (`Decoder.KnownFields(true)`, plus a manual key check
+in `EntrySpec.UnmarshalYAML`, which `KnownFields` does not reach) to catch typos.
 
 ## Core data model
 
