@@ -1,6 +1,7 @@
 # polkadot
 
 [![ci](https://github.com/taskie/polkadot/actions/workflows/ci.yml/badge.svg)](https://github.com/taskie/polkadot/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/taskie/polkadot/branch/main/graph/badge.svg)](https://codecov.io/gh/taskie/polkadot)
 
 An application to generate dotfiles from https://github.com/taskie/dotfiles .
 
