@@ -5,12 +5,13 @@ An application to generate dotfiles from https://github.com/taskie/dotfiles .
 ## Usage
 
 ```
-polkadot [-c <polkadot.yml>] [-n] [-raw] [-V] [<component-dir> ...]
+polkadot [-c <polkadot.yml>] [-n] [-raw] [-v] [-V] [<component-dir> ...]
 ```
 
 - `-c` — path to a `polkadot.yml` config (default: `./polkadot.yml` if present).
 - `-n` — dry run; resolve everything but don't write any files.
 - `-raw` — concatenate fragments without normalizing newlines.
+- `-v` — verbose; show status headers, debug logs, and each target's sources.
 - `-V` — print the version and exit.
 
 The positional arguments are *component directories* that hold the fragments

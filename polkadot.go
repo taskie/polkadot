@@ -24,19 +24,24 @@ import (
 
 const version = "0.1.0"
 
+// Output policy: stdout carries the result (the list of target files, plus
+// their sources with -v); stderr carries status headers and debug logs, which
+// are shown only with -v, except for the dry-run notice and errors.
+
 func main() {
 	err := run()
 	if err != nil {
-		color.New(color.FgRed, color.Bold).Println("* Failed.")
-		log.Fatal(err)
+		color.New(color.FgRed, color.Bold).Fprint(os.Stderr, "* Failed: ")
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
-	color.New(color.FgGreen, color.Bold).Println("* Completed.")
 }
 
 func run() error {
 	configFlag := flag.String("c", "", "path to "+configFileName+" (default: ./"+configFileName+" if it exists)")
 	dryRunFlag := flag.Bool("n", false, "performs a trial run")
 	rawFlag := flag.Bool("raw", false, "concatenate files without normalizing newlines")
+	verboseFlag := flag.Bool("v", false, "shows status headers, debug logs, and sources")
 	versionFlag := flag.Bool("V", false, "shows version info")
 	flag.Parse()
 	if *versionFlag {
@@ -59,21 +64,23 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	app.verbose = *verboseFlag
 
-	color.New(color.FgCyan, color.Bold).Println("* Preparing...")
+	app.status(color.FgCyan, "Preparing...")
 	err = app.Prepare()
 	if err != nil {
 		return err
 	}
 	if *dryRunFlag {
-		color.New(color.FgYellow, color.Bold).Println("* Dry-run mode is enabled.")
+		color.New(color.FgYellow, color.Bold).Fprintln(os.Stderr, "* Dry-run mode is enabled.")
 	} else {
-		color.New(color.FgCyan, color.Bold).Println("* Executing...")
+		app.status(color.FgCyan, "Executing...")
 		err = app.Execute()
 		if err != nil {
 			return err
 		}
 	}
+	app.status(color.FgGreen, "Completed.")
 	return nil
 }
 
@@ -166,6 +173,7 @@ type App struct {
 	entryPaths      []string
 	inlineTags      map[string]string
 	polkaDirPaths   []string
+	verbose         bool
 	// Load
 	entryTags   map[string]string
 	tagConf     map[string]map[string]string
@@ -179,20 +187,34 @@ type App struct {
 	rawConcat bool
 }
 
+// logf writes a debug log to stderr only in verbose mode.
+func (a *App) logf(format string, v ...any) {
+	if a.verbose {
+		log.Printf(format, v...)
+	}
+}
+
+// status writes a colored status header to stderr only in verbose mode.
+func (a *App) status(attr color.Attribute, msg string) {
+	if a.verbose {
+		color.New(attr, color.Bold).Fprintln(os.Stderr, "* "+msg)
+	}
+}
+
 func (a *App) Prepare() error {
 	if a.configPath != "" {
-		log.Printf("config: %s\n", a.configPath)
+		a.logf("config: %s\n", a.configPath)
 	}
-	log.Printf("dotfiles dir: %s\n", a.dotfilesDirPath)
-	log.Printf("entry files: %+v\n", a.entryPaths)
-	log.Printf("component dirs: %+v\n", a.polkaDirPaths)
+	a.logf("dotfiles dir: %s\n", a.dotfilesDirPath)
+	a.logf("entry files: %+v\n", a.entryPaths)
+	a.logf("component dirs: %+v\n", a.polkaDirPaths)
 
 	entryTags, err := a.LoadEntry()
 	if err != nil {
 		return err
 	}
 	entryTags["default"] = "default"
-	log.Printf("entry tags: %+v\n", entryTags)
+	a.logf("entry tags: %+v\n", entryTags)
 	a.entryTags = entryTags
 
 	tagConf, err := a.LoadTags()
@@ -211,14 +233,14 @@ func (a *App) Prepare() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("accepted tags: %+v\n", acceptedTags)
-	log.Printf("rejected tags: %+v\n", rejectedTags)
+	a.logf("accepted tags: %+v\n", acceptedTags)
+	a.logf("rejected tags: %+v\n", rejectedTags)
 
 	tagMap, err := a.Collect()
 	if err != nil {
 		return err
 	}
-	log.Printf("collected tags: %+v\n", tagMap)
+	a.logf("collected tags: %+v\n", tagMap)
 	tagMap["dotfiles"] = a.dotfilesDirPath
 	tagMap["gtp"] = "gtp"
 	for tag, value := range acceptedTags {
@@ -227,22 +249,23 @@ func (a *App) Prepare() error {
 	for tag := range rejectedTags {
 		delete(tagMap, tag)
 	}
-	log.Printf("resolved tags: %+v\n", tagMap)
+	a.logf("resolved tags: %+v\n", tagMap)
 	a.tagMap = tagMap
 
 	dotEntries, err := a.Weave()
 	if err != nil {
 		return err
 	}
-	log.Printf("sources: (following)")
 	for _, entry := range dotEntries {
 		if entry.Target.Mode != nil {
 			color.New(color.FgBlue).Printf("%s (mode: %o)\n", entry.Path(), *entry.Target.Mode)
 		} else {
 			color.New(color.FgBlue).Println(entry.Path())
 		}
-		for _, source := range entry.Sources {
-			fmt.Println("- " + source.Path)
+		if a.verbose {
+			for _, source := range entry.Sources {
+				fmt.Println("- " + source.Path)
+			}
 		}
 	}
 	a.dotEntries = dotEntries
@@ -481,7 +504,7 @@ func makeTagItem(rawTag string, value string, depth int) tagItem {
 	negative := false
 	importance := 0
 	tag := rawTag
-	for strings.HasPrefix(tag, "!") {
+	if strings.HasPrefix(tag, "!") {
 		exclamationCount := 0
 		for _, c := range tag {
 			if c == '!' {

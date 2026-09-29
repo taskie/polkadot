@@ -25,13 +25,15 @@ single `App` struct.
 ## Invocation
 
 ```
-polkadot [-c <polkadot.yml>] [-n] [-raw] [-V] [<component-dir> ...]
+polkadot [-c <polkadot.yml>] [-n] [-raw] [-v] [-V] [<component-dir> ...]
 ```
 
 - `-c` — path to a `polkadot.yml` config. Defaults to `./polkadot.yml` if it
   exists.
 - `-n` — dry run: do everything except write output files.
 - `-raw` — concatenate fragments verbatim (no newline normalization).
+- `-v` — verbose: status headers and debug logs (stderr), and each target's
+  source fragments (stdout).
 - `-V` — print version and exit.
 - positional args — the *component directories* (`polkaDirPaths`) to scan.
   When given, they **replace** `components` from `polkadot.yml`.
@@ -198,6 +200,7 @@ declaration.
   runs produce identical output.
 - **Layered overrides** everywhere: multiple component dirs are processed in
   order and later ones win, enabling a base + per-host layering scheme.
-- **Fail fast, log loudly.** Errors bubble up to `main()`, which prints a red
-  "Failed" and exits non-zero; progress is narrated with colored headers and the
-  resolved tag maps / source lists are logged for debugging.
+- **Fail fast, quiet by default.** Errors bubble up to `main()`, which prints a
+  red "Failed" with the error to stderr and exits non-zero. stdout carries only
+  the result (target files, plus their sources with `-v`); colored status
+  headers and the resolved tag maps go to stderr and only with `-v`.
