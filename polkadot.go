@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -654,13 +655,13 @@ func (w *Weaver) Weave(polkaDirPaths []string, tagMap map[string]string, ruleCon
 
 func (w *Weaver) Walk(baseDir string, tagMap map[string]string, ruleConf WeaverRule) (map[string]DotSource, error) {
 	sourceMap := make(map[string]DotSource)
-	err := filepath.Walk(
+	err := filepath.WalkDir(
 		baseDir,
-		func(path string, info os.FileInfo, err error) error {
+		func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
-			if info.IsDir() {
+			if d.IsDir() {
 				return nil
 			}
 			name := strings.TrimPrefix(path, baseDir)
