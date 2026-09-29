@@ -659,3 +659,23 @@ func TestLoadEntry(t *testing.T) {
 		}
 	})
 }
+
+func TestGetVersion(t *testing.T) {
+	t.Run("injected", func(t *testing.T) {
+		orig := version
+		t.Cleanup(func() { version = orig })
+		version = "1.2.3"
+		if got := getVersion(); got != "1.2.3" {
+			t.Errorf("getVersion() = %q, want %q", got, "1.2.3")
+		}
+	})
+
+	t.Run("fallback", func(t *testing.T) {
+		orig := version
+		t.Cleanup(func() { version = orig })
+		version = ""
+		if got := getVersion(); got == "" {
+			t.Error("getVersion() returned empty string")
+		}
+	})
+}

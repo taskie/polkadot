@@ -19,7 +19,9 @@ single `App` struct.
   (colored progress output). Everything else is the standard library.
 - **Entry point:** `main()` → `run()` in `polkadot.go`.
 - **Release:** GoReleaser (`.goreleaser.yml`) builds static (`CGO_ENABLED=0`)
-  binaries for linux/windows/darwin.
+  binaries for linux/windows/darwin, injecting the tag into `main.version` via
+  `-ldflags -X`. Without it, `-V` falls back to the module version from
+  `runtime/debug.ReadBuildInfo` (e.g. `go install ...@v0.2.0`), else `dev`.
 - **Tests:** `polkadot_test.go` covers the tag `Expander` (the trickiest part).
 
 ## Invocation

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,7 +23,20 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-const version = "0.1.0"
+// version is injected at build time via -ldflags "-X main.version=...".
+var version = ""
+
+// getVersion returns the injected version, falling back to the module version
+// recorded by `go install ...@vX.Y.Z`, or "dev" for local builds.
+func getVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return strings.TrimPrefix(info.Main.Version, "v")
+	}
+	return "dev"
+}
 
 // Output policy: stdout carries the result (the list of target files, plus
 // their sources with -v); stderr carries status headers and debug logs, which
@@ -45,7 +59,7 @@ func run() error {
 	versionFlag := flag.Bool("V", false, "shows version info")
 	flag.Parse()
 	if *versionFlag {
-		fmt.Println(version)
+		fmt.Println(getVersion())
 		return nil
 	}
 
