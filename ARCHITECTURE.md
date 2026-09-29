@@ -57,6 +57,8 @@ override earlier ones for same-keyed config.
 entries:        # entry files merged in order (later wins); default [entry.yml],
   - entry.yml   # `entries: []` disables it
   - hosts/myhost.yml
+  - path: entry.local.yml   # object form; an optional file is skipped
+    optional: true          # when it does not exist
 tags:           # inline entry tags, merged after the entry files
   wsl:
 components:     # component dirs, in override order
@@ -113,7 +115,8 @@ paths.yml ──►  Collect (probe the system: exec/file/dir/env)
 
 - **entry files** (`entry.yml` in the dotfiles root, or the `entries` list of
   `polkadot.yml`) — each a flat `map[string]string` of the tags this machine
-  should activate. Files are merged in order, then inline `tags` from
+  should activate. A missing file is an error unless marked `optional`, in
+  which case it is skipped. Files are merged in order, then inline `tags` from
   `polkadot.yml` on top. An empty value defaults to the key itself. A
   built-in `default: default` tag is always added.
 - **`<dir>/tags.yml`** — a `map[tag]map[childTag]value`: declaring a tag pulls in

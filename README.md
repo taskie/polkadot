@@ -82,6 +82,8 @@ it works from any cwd:
 entries:            # merged in order, later wins (default: [entry.yml])
   - entry.yml
   - hosts/myhost.yml
+  - path: entry.local.yml   # skipped if it does not exist
+    optional: true
 tags:               # inline entry tags, merged last
   wsl:
 components:         # component dirs, later ones override earlier ones

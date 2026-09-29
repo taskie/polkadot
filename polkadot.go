@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"container/list"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -103,10 +104,34 @@ func run() error {
 const configFileName = "polkadot.yml"
 
 type Config struct {
-	Entries    []string          `yaml:"entries"`
+	Entries    []EntrySpec       `yaml:"entries"`
 	Tags       map[string]string `yaml:"tags"`
 	Components []string          `yaml:"components"`
 	Raw        *bool             `yaml:"raw"`
+}
+
+// EntrySpec is an entry file reference in polkadot.yml. It is written either
+// as a plain path or as {path: ..., optional: true}; an optional entry file is
+// skipped when it does not exist.
+type EntrySpec struct {
+	Path     string `yaml:"path"`
+	Optional bool   `yaml:"optional"`
+}
+
+func (e *EntrySpec) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var path string
+	if err := unmarshal(&path); err == nil {
+		*e = EntrySpec{Path: path}
+	} else {
+		type plain EntrySpec
+		if err := unmarshal((*plain)(e)); err != nil {
+			return err
+		}
+	}
+	if e.Path == "" {
+		return fmt.Errorf("entry path must not be empty")
+	}
+	return nil
 }
 
 // LoadConfig reads a polkadot.yml. Relative paths in it are resolved against
@@ -122,18 +147,21 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	if config.Entries == nil {
-		config.Entries = []string{"entry.yml"}
+		config.Entries = []EntrySpec{{Path: "entry.yml"}}
 	}
 	baseDir := filepath.Dir(path)
-	resolve := func(paths []string) {
-		for i, p := range paths {
-			if !filepath.IsAbs(p) {
-				paths[i] = filepath.Join(baseDir, p)
-			}
+	resolve := func(p string) string {
+		if filepath.IsAbs(p) {
+			return p
 		}
+		return filepath.Join(baseDir, p)
 	}
-	resolve(config.Entries)
-	resolve(config.Components)
+	for i := range config.Entries {
+		config.Entries[i].Path = resolve(config.Entries[i].Path)
+	}
+	for i := range config.Components {
+		config.Components[i] = resolve(config.Components[i])
+	}
 	return &config, nil
 }
 
@@ -150,7 +178,7 @@ func NewApp(pwd string, configPath string, args []string, raw *bool) (*App, erro
 	}
 	app := &App{
 		dotfilesDirPath: pwd,
-		entryPaths:      []string{filepath.Join(pwd, "entry.yml")},
+		entries:         []EntrySpec{{Path: filepath.Join(pwd, "entry.yml")}},
 		polkaDirPaths:   args,
 	}
 	if configPath != "" {
@@ -163,7 +191,7 @@ func NewApp(pwd string, configPath string, args []string, raw *bool) (*App, erro
 		}
 		app.configPath = configPath
 		app.dotfilesDirPath = filepath.Dir(configPath)
-		app.entryPaths = config.Entries
+		app.entries = config.Entries
 		app.inlineTags = config.Tags
 		if len(args) == 0 {
 			app.polkaDirPaths = config.Components
@@ -184,7 +212,7 @@ type App struct {
 	// Input
 	configPath      string
 	dotfilesDirPath string
-	entryPaths      []string
+	entries         []EntrySpec
 	inlineTags      map[string]string
 	polkaDirPaths   []string
 	verbose         bool
@@ -220,7 +248,7 @@ func (a *App) Prepare() error {
 		a.logf("config: %s\n", a.configPath)
 	}
 	a.logf("dotfiles dir: %s\n", a.dotfilesDirPath)
-	a.logf("entry files: %+v\n", a.entryPaths)
+	a.logf("entry files: %+v\n", a.entries)
 	a.logf("component dirs: %+v\n", a.polkaDirPaths)
 
 	entryTags, err := a.LoadEntry()
@@ -298,9 +326,14 @@ func (a *App) Execute() error {
 
 func (a *App) LoadEntry() (map[string]string, error) {
 	props := make(map[string]string)
-	for _, entryPath := range a.entryPaths {
+	for _, entry := range a.entries {
+		entryPath := entry.Path
 		buf, err := os.ReadFile(entryPath)
 		if err != nil {
+			if entry.Optional && errors.Is(err, fs.ErrNotExist) {
+				a.logf("skip optional entry file: %s\n", entryPath)
+				continue
+			}
 			return nil, fmt.Errorf("read %s: %w", entryPath, err)
 		}
 		var subProps map[string]string

@@ -527,8 +527,8 @@ func TestNewApp(t *testing.T) {
 		if app.dotfilesDirPath != pwd {
 			t.Errorf("dotfilesDirPath = %q, want %q", app.dotfilesDirPath, pwd)
 		}
-		if want := []string{filepath.Join(pwd, "entry.yml")}; !reflect.DeepEqual(app.entryPaths, want) {
-			t.Errorf("entryPaths = %v, want %v", app.entryPaths, want)
+		if want := []EntrySpec{{Path: filepath.Join(pwd, "entry.yml")}}; !reflect.DeepEqual(app.entries, want) {
+			t.Errorf("entries = %v, want %v", app.entries, want)
 		}
 		if want := []string{"common"}; !reflect.DeepEqual(app.polkaDirPaths, want) {
 			t.Errorf("polkaDirPaths = %v, want %v", app.polkaDirPaths, want)
@@ -539,7 +539,7 @@ func TestNewApp(t *testing.T) {
 		pwd := t.TempDir()
 		root := t.TempDir()
 		configPath := filepath.Join(root, "polkadot.yml")
-		writeFile(t, configPath, "entries: [entry.yml, hosts/a.yml]\ncomponents: [common, /abs/linux]\n")
+		writeFile(t, configPath, "entries: [entry.yml, {path: hosts/a.yml, optional: true}]\ncomponents: [common, /abs/linux]\n")
 
 		app, err := NewApp(pwd, configPath, nil, nil)
 		if err != nil {
@@ -548,8 +548,12 @@ func TestNewApp(t *testing.T) {
 		if app.dotfilesDirPath != root {
 			t.Errorf("dotfilesDirPath = %q, want %q", app.dotfilesDirPath, root)
 		}
-		if want := []string{filepath.Join(root, "entry.yml"), filepath.Join(root, "hosts/a.yml")}; !reflect.DeepEqual(app.entryPaths, want) {
-			t.Errorf("entryPaths = %v, want %v", app.entryPaths, want)
+		want := []EntrySpec{
+			{Path: filepath.Join(root, "entry.yml")},
+			{Path: filepath.Join(root, "hosts/a.yml"), Optional: true},
+		}
+		if !reflect.DeepEqual(app.entries, want) {
+			t.Errorf("entries = %v, want %v", app.entries, want)
 		}
 		if want := []string{filepath.Join(root, "common"), "/abs/linux"}; !reflect.DeepEqual(app.polkaDirPaths, want) {
 			t.Errorf("polkaDirPaths = %v, want %v", app.polkaDirPaths, want)
@@ -564,8 +568,8 @@ func TestNewApp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if want := []string{filepath.Join(pwd, "entry.yml")}; !reflect.DeepEqual(app.entryPaths, want) {
-			t.Errorf("entryPaths = %v, want %v", app.entryPaths, want)
+		if want := []EntrySpec{{Path: filepath.Join(pwd, "entry.yml")}}; !reflect.DeepEqual(app.entries, want) {
+			t.Errorf("entries = %v, want %v", app.entries, want)
 		}
 		if want := []string{filepath.Join(pwd, "common")}; !reflect.DeepEqual(app.polkaDirPaths, want) {
 			t.Errorf("polkaDirPaths = %v, want %v", app.polkaDirPaths, want)
@@ -580,8 +584,8 @@ func TestNewApp(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(app.entryPaths) != 0 {
-			t.Errorf("entryPaths = %v, want empty", app.entryPaths)
+		if len(app.entries) != 0 {
+			t.Errorf("entries = %v, want empty", app.entries)
 		}
 	})
 
@@ -614,6 +618,21 @@ func TestNewApp(t *testing.T) {
 		}
 	})
 
+	t.Run("rejects_invalid_entries", func(t *testing.T) {
+		for _, content := range []string{
+			"entries: [{path: a.yml, optinal: true}]\n",
+			"entries: [{optional: true}]\n",
+			"entries: [\"\"]\n",
+		} {
+			pwd := t.TempDir()
+			writeFile(t, filepath.Join(pwd, "polkadot.yml"), content)
+
+			if _, err := NewApp(pwd, "", nil, nil); err == nil {
+				t.Errorf("expected error for %q", content)
+			}
+		}
+	})
+
 	t.Run("rejects_unknown_keys", func(t *testing.T) {
 		pwd := t.TempDir()
 		writeFile(t, filepath.Join(pwd, "polkadot.yml"), "component: [common]\n")
@@ -632,7 +651,7 @@ func TestLoadEntry(t *testing.T) {
 		os.WriteFile(base, []byte("linux:\narch:\nemacs: /usr/bin/emacs\n"), 0644)
 		os.WriteFile(host, []byte("arch: \"!arch\"\neditor: vim\n"), 0644)
 		app := App{
-			entryPaths: []string{base, host},
+			entries:    []EntrySpec{{Path: base}, {Path: host}},
 			inlineTags: map[string]string{"editor": "", "wsl": ""},
 		}
 
@@ -653,9 +672,42 @@ func TestLoadEntry(t *testing.T) {
 	})
 
 	t.Run("missing_file_is_error", func(t *testing.T) {
-		app := App{entryPaths: []string{filepath.Join(t.TempDir(), "nope.yml")}}
+		app := App{entries: []EntrySpec{{Path: filepath.Join(t.TempDir(), "nope.yml")}}}
 		if _, err := app.LoadEntry(); err == nil {
 			t.Error("expected error for missing entry file")
+		}
+	})
+
+	t.Run("missing_optional_file_is_skipped", func(t *testing.T) {
+		dir := t.TempDir()
+		base := filepath.Join(dir, "entry.yml")
+		os.WriteFile(base, []byte("linux:\n"), 0644)
+		app := App{entries: []EntrySpec{
+			{Path: base},
+			{Path: filepath.Join(dir, "entry.local.yml"), Optional: true},
+		}}
+
+		props, err := app.LoadEntry()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"linux": "linux"}; !reflect.DeepEqual(props, want) {
+			t.Errorf("props = %v, want %v", props, want)
+		}
+	})
+
+	t.Run("existing_optional_file_is_loaded", func(t *testing.T) {
+		dir := t.TempDir()
+		local := filepath.Join(dir, "entry.local.yml")
+		os.WriteFile(local, []byte("wsl:\n"), 0644)
+		app := App{entries: []EntrySpec{{Path: local, Optional: true}}}
+
+		props, err := app.LoadEntry()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := map[string]string{"wsl": "wsl"}; !reflect.DeepEqual(props, want) {
+			t.Errorf("props = %v, want %v", props, want)
 		}
 	})
 }
