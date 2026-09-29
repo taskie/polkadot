@@ -1,5 +1,7 @@
 # polkadot
 
+[![ci](https://github.com/taskie/polkadot/actions/workflows/ci.yml/badge.svg)](https://github.com/taskie/polkadot/actions/workflows/ci.yml)
+
 An application to generate dotfiles from https://github.com/taskie/dotfiles .
 
 ## Usage
