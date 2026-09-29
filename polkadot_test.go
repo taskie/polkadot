@@ -731,3 +731,98 @@ func TestGetVersion(t *testing.T) {
 		}
 	})
 }
+
+func TestWriteFileAtomic(t *testing.T) {
+	listDir := func(t *testing.T, dir string) []string {
+		t.Helper()
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range ents {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	t.Run("creates_file_with_mode", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "out")
+
+		if err := writeFileAtomic(out, []byte("new\n"), 0640); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := os.ReadFile(out)
+		if string(content) != "new\n" {
+			t.Errorf("got %q, want %q", content, "new\n")
+		}
+		st, _ := os.Stat(out)
+		if st.Mode().Perm() != 0640 {
+			t.Errorf("mode = %o, want %o", st.Mode().Perm(), 0640)
+		}
+		if names := listDir(t, dir); !reflect.DeepEqual(names, []string{"out"}) {
+			t.Errorf("leftover files: %v", names)
+		}
+	})
+
+	t.Run("replaces_existing_file_and_updates_mode", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "out")
+		os.WriteFile(out, []byte("old content that is longer\n"), 0600)
+
+		if err := writeFileAtomic(out, []byte("new\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		content, _ := os.ReadFile(out)
+		if string(content) != "new\n" {
+			t.Errorf("got %q, want %q", content, "new\n")
+		}
+		st, _ := os.Stat(out)
+		if st.Mode().Perm() != 0644 {
+			t.Errorf("mode = %o, want %o", st.Mode().Perm(), 0644)
+		}
+	})
+
+	t.Run("writes_through_symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		real := filepath.Join(dir, "real")
+		link := filepath.Join(dir, "link")
+		os.WriteFile(real, []byte("old\n"), 0644)
+		if err := os.Symlink(real, link); err != nil {
+			t.Skip(err)
+		}
+
+		if err := writeFileAtomic(link, []byte("new\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if fi, _ := os.Lstat(link); fi.Mode()&os.ModeSymlink == 0 {
+			t.Error("symlink was replaced by a regular file")
+		}
+		content, _ := os.ReadFile(real)
+		if string(content) != "new\n" {
+			t.Errorf("got %q, want %q", content, "new\n")
+		}
+	})
+
+	t.Run("failure_keeps_existing_file", func(t *testing.T) {
+		dir := t.TempDir()
+		out := filepath.Join(dir, "out")
+		os.WriteFile(out, []byte("keep\n"), 0644)
+		// A directory at the rename target makes the rename fail.
+		target := filepath.Join(dir, "target")
+		os.Mkdir(target, 0755)
+		os.WriteFile(filepath.Join(target, "x"), nil, 0644)
+
+		if err := writeFileAtomic(target, []byte("new\n"), 0644); err == nil {
+			t.Fatal("expected error")
+		}
+		if names := listDir(t, dir); !reflect.DeepEqual(names, []string{"out", "target"}) {
+			t.Errorf("leftover files: %v", names)
+		}
+		content, _ := os.ReadFile(out)
+		if string(content) != "keep\n" {
+			t.Errorf("got %q, want %q", content, "keep\n")
+		}
+	})
+}

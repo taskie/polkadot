@@ -174,8 +174,12 @@ configured subdirectory, keeping files whose name matches the rule's regexp.
 ### 5. Generate (`Generator`)
 
 For each `DotEntry`: expand `~/` in the target path, `mkdir -p` the parent
-directory, open the file with the rule's mode (default `0644`), and **concatenate
-all source fragments** into it.
+directory, **concatenate all source fragments** in memory, and write the result
+atomically (`writeFileAtomic`): a temporary file in the same directory gets the
+content and the rule's mode (default `0644`, applied exactly, also to existing
+files), then is renamed over the target. A failed write never leaves a partial
+dotfile. If the target is a symlink, the file it points to is replaced and the
+link is kept.
 
 - Fragments tagged `gtp` (the built-in "go-template" tag) are rendered through
   Go's `text/template` with `tagMap` as the data context.

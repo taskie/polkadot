@@ -893,14 +893,45 @@ func (g *Generator) Generate(dotEntry DotEntry, tagMap map[string]string) error 
 		content = excessNewlines.ReplaceAll(content, []byte("\n\n"))
 	}
 
-	outFile, err := os.OpenFile(outFilePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(mode))
-	if err != nil {
-		return fmt.Errorf("create %s: %w", outFilePath, err)
-	}
-	defer outFile.Close()
+	return writeFileAtomic(outFilePath, content, os.FileMode(mode))
+}
 
-	_, err = outFile.Write(content)
-	return err
+// writeFileAtomic writes content to a temporary file in the same directory and
+// renames it over path, so a failure never leaves a partially written file.
+// If path is a symlink, the file it points to is replaced and the link is kept.
+// The mode is applied exactly (regardless of umask), also to existing files.
+func writeFileAtomic(path string, content []byte, mode os.FileMode) (err error) {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			return fmt.Errorf("resolve symlink %s: %w", path, err)
+		}
+		path = resolved
+	}
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".polkadot-*")
+	if err != nil {
+		return fmt.Errorf("create temp for %s: %w", path, err)
+	}
+	tmpPath := tmpFile.Name()
+	defer func() {
+		if err != nil {
+			tmpFile.Close()
+			os.Remove(tmpPath)
+		}
+	}()
+	if _, err = tmpFile.Write(content); err != nil {
+		return fmt.Errorf("write %s: %w", tmpPath, err)
+	}
+	if err = tmpFile.Chmod(mode); err != nil {
+		return fmt.Errorf("chmod %s: %w", tmpPath, err)
+	}
+	if err = tmpFile.Close(); err != nil {
+		return fmt.Errorf("close %s: %w", tmpPath, err)
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("rename %s to %s: %w", tmpPath, path, err)
+	}
+	return nil
 }
 
 // Utils
