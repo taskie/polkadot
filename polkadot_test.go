@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -936,4 +938,44 @@ nothing:
 			}
 		})
 	}
+}
+
+func TestLoadYAML(t *testing.T) {
+	t.Run("missing_file_is_not_exist", func(t *testing.T) {
+		var v map[string]string
+		err := loadYAML(filepath.Join(t.TempDir(), "nope.yml"), &v)
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("err = %v, want fs.ErrNotExist", err)
+		}
+	})
+
+	t.Run("components_skip_missing_files", func(t *testing.T) {
+		app := App{polkaDirPaths: []string{t.TempDir()}}
+		if _, err := app.LoadTags(); err != nil {
+			t.Errorf("LoadTags: %v", err)
+		}
+		if _, err := app.LoadRules(); err != nil {
+			t.Errorf("LoadRules: %v", err)
+		}
+		if _, err := app.Collect(); err != nil {
+			t.Errorf("Collect: %v", err)
+		}
+	})
+
+	t.Run("components_fail_on_unreadable_files", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"tags.yml", "rules.yml", "paths.yml"} {
+			os.Mkdir(filepath.Join(dir, name), 0755) // a directory cannot be read as a file
+		}
+		app := App{polkaDirPaths: []string{dir}}
+		if _, err := app.LoadTags(); err == nil {
+			t.Error("LoadTags: expected error")
+		}
+		if _, err := app.LoadRules(); err == nil {
+			t.Error("LoadRules: expected error")
+		}
+		if _, err := app.Collect(); err == nil {
+			t.Error("Collect: expected error")
+		}
+	})
 }

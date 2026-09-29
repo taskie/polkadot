@@ -147,14 +147,9 @@ func (e *EntrySpec) UnmarshalYAML(node *yaml.Node) error {
 // LoadConfig reads a polkadot.yml. Relative paths in it are resolved against
 // the directory containing the file. An absent `entries` defaults to entry.yml.
 func LoadConfig(path string) (*Config, error) {
-	buf, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
 	var config Config
-	err = decodeYAML(buf, &config)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+	if err := loadYAML(path, &config); err != nil {
+		return nil, err
 	}
 	if config.Entries == nil {
 		config.Entries = []EntrySpec{{Path: "entry.yml"}}
@@ -337,19 +332,14 @@ func (a *App) Execute() error {
 func (a *App) LoadEntry() (map[string]string, error) {
 	props := make(map[string]string)
 	for _, entry := range a.entries {
-		entryPath := entry.Path
-		buf, err := os.ReadFile(entryPath)
-		if err != nil {
-			if entry.Optional && errors.Is(err, fs.ErrNotExist) {
-				a.logf("skip optional entry file: %s\n", entryPath)
-				continue
-			}
-			return nil, fmt.Errorf("read %s: %w", entryPath, err)
-		}
 		var subProps map[string]string
-		err = decodeYAML(buf, &subProps)
+		err := loadYAML(entry.Path, &subProps)
+		if entry.Optional && errors.Is(err, fs.ErrNotExist) {
+			a.logf("skip optional entry file: %s\n", entry.Path)
+			continue
+		}
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", entryPath, err)
+			return nil, err
 		}
 		for k, v := range subProps {
 			props[k] = v // overwrite
@@ -371,17 +361,13 @@ func (a *App) Collect() (map[string]string, error) {
 	props := make(map[string]string)
 	for _, dirPath := range a.polkaDirPaths {
 		confPath := filepath.Join(dirPath, "paths.yml")
-		if _, err := os.Stat(confPath); err != nil {
+		var pathsConf PathsConf
+		err := loadYAML(confPath, &pathsConf)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		buf, err := os.ReadFile(confPath)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", confPath, err)
-		}
-		var pathsConf PathsConf
-		err = decodeYAML(buf, &pathsConf)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", confPath, err)
+			return nil, err
 		}
 		if err := pathsConf.Validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", confPath, err)
@@ -401,17 +387,13 @@ func (a *App) LoadTags() (map[string]map[string]string, error) {
 	propsDef := make(map[string]map[string]string)
 	for _, dirPath := range a.polkaDirPaths {
 		confPath := filepath.Join(dirPath, "tags.yml")
-		if _, err := os.Stat(confPath); err != nil {
+		var tagConfMap map[string]map[string]string
+		err := loadYAML(confPath, &tagConfMap)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		buf, err := os.ReadFile(confPath)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", confPath, err)
-		}
-		var tagConfMap map[string]map[string]string
-		err = decodeYAML(buf, &tagConfMap)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", confPath, err)
+			return nil, err
 		}
 		for tag, children := range tagConfMap {
 			for k, v := range children {
@@ -429,17 +411,13 @@ func (a *App) LoadRules() (map[string]WeaverRule, error) {
 	ruleConfMap := make(map[string]WeaverRule)
 	for _, dirPath := range a.polkaDirPaths {
 		confPath := filepath.Join(dirPath, "rules.yml")
-		if _, err := os.Stat(confPath); err != nil {
+		var rulesConf RulesConf
+		err := loadYAML(confPath, &rulesConf)
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		buf, err := os.ReadFile(confPath)
 		if err != nil {
-			return nil, fmt.Errorf("read %s: %w", confPath, err)
-		}
-		var rulesConf RulesConf
-		err = decodeYAML(buf, &rulesConf)
-		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", confPath, err)
+			return nil, err
 		}
 		for k, v := range rulesConf {
 			if v.Dir == "" && len(v.Dirs) == 0 {
@@ -975,6 +953,20 @@ func writeFileAtomic(path string, content []byte, mode os.FileMode) (err error) 
 }
 
 // Utils
+
+// loadYAML reads and strictly decodes the YAML file at path. A missing file is
+// reported as an error wrapping fs.ErrNotExist, so optional files can be
+// skipped with errors.Is while other read errors still fail.
+func loadYAML(path string, v any) error {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", path, err)
+	}
+	if err := decodeYAML(buf, v); err != nil {
+		return fmt.Errorf("parse %s: %w", path, err)
+	}
+	return nil
+}
 
 // decodeYAML decodes a YAML document strictly: unknown struct fields and
 // duplicate keys are errors. An empty document decodes to the zero value.
