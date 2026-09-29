@@ -504,3 +504,158 @@ func TestGenerator(t *testing.T) {
 		}
 	})
 }
+
+func TestNewApp(t *testing.T) {
+	writeFile := func(t *testing.T, path string, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	boolPtr := func(b bool) *bool { return &b }
+
+	t.Run("fallback_without_config", func(t *testing.T) {
+		pwd := t.TempDir()
+
+		app, err := NewApp(pwd, "", []string{"common"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.dotfilesDirPath != pwd {
+			t.Errorf("dotfilesDirPath = %q, want %q", app.dotfilesDirPath, pwd)
+		}
+		if want := []string{filepath.Join(pwd, "entry.yml")}; !reflect.DeepEqual(app.entryPaths, want) {
+			t.Errorf("entryPaths = %v, want %v", app.entryPaths, want)
+		}
+		if want := []string{"common"}; !reflect.DeepEqual(app.polkaDirPaths, want) {
+			t.Errorf("polkaDirPaths = %v, want %v", app.polkaDirPaths, want)
+		}
+	})
+
+	t.Run("resolves_paths_relative_to_config", func(t *testing.T) {
+		pwd := t.TempDir()
+		root := t.TempDir()
+		configPath := filepath.Join(root, "polkadot.yml")
+		writeFile(t, configPath, "entries: [entry.yml, hosts/a.yml]\ncomponents: [common, /abs/linux]\n")
+
+		app, err := NewApp(pwd, configPath, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if app.dotfilesDirPath != root {
+			t.Errorf("dotfilesDirPath = %q, want %q", app.dotfilesDirPath, root)
+		}
+		if want := []string{filepath.Join(root, "entry.yml"), filepath.Join(root, "hosts/a.yml")}; !reflect.DeepEqual(app.entryPaths, want) {
+			t.Errorf("entryPaths = %v, want %v", app.entryPaths, want)
+		}
+		if want := []string{filepath.Join(root, "common"), "/abs/linux"}; !reflect.DeepEqual(app.polkaDirPaths, want) {
+			t.Errorf("polkaDirPaths = %v, want %v", app.polkaDirPaths, want)
+		}
+	})
+
+	t.Run("discovers_config_in_pwd", func(t *testing.T) {
+		pwd := t.TempDir()
+		writeFile(t, filepath.Join(pwd, "polkadot.yml"), "components: [common]\n")
+
+		app, err := NewApp(pwd, "", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{filepath.Join(pwd, "entry.yml")}; !reflect.DeepEqual(app.entryPaths, want) {
+			t.Errorf("entryPaths = %v, want %v", app.entryPaths, want)
+		}
+		if want := []string{filepath.Join(pwd, "common")}; !reflect.DeepEqual(app.polkaDirPaths, want) {
+			t.Errorf("polkaDirPaths = %v, want %v", app.polkaDirPaths, want)
+		}
+	})
+
+	t.Run("empty_entries_disables_default", func(t *testing.T) {
+		pwd := t.TempDir()
+		writeFile(t, filepath.Join(pwd, "polkadot.yml"), "entries: []\n")
+
+		app, err := NewApp(pwd, "", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(app.entryPaths) != 0 {
+			t.Errorf("entryPaths = %v, want empty", app.entryPaths)
+		}
+	})
+
+	t.Run("cli_overrides_config", func(t *testing.T) {
+		pwd := t.TempDir()
+		writeFile(t, filepath.Join(pwd, "polkadot.yml"), "components: [common]\nraw: true\n")
+
+		app, err := NewApp(pwd, "", []string{"other"}, boolPtr(false))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"other"}; !reflect.DeepEqual(app.polkaDirPaths, want) {
+			t.Errorf("polkaDirPaths = %v, want %v", app.polkaDirPaths, want)
+		}
+		if app.rawConcat {
+			t.Error("expected -raw=false to override raw: true")
+		}
+	})
+
+	t.Run("config_raw_applies", func(t *testing.T) {
+		pwd := t.TempDir()
+		writeFile(t, filepath.Join(pwd, "polkadot.yml"), "raw: true\n")
+
+		app, err := NewApp(pwd, "", nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !app.rawConcat {
+			t.Error("expected raw: true to enable rawConcat")
+		}
+	})
+
+	t.Run("rejects_unknown_keys", func(t *testing.T) {
+		pwd := t.TempDir()
+		writeFile(t, filepath.Join(pwd, "polkadot.yml"), "component: [common]\n")
+
+		if _, err := NewApp(pwd, "", nil, nil); err == nil {
+			t.Error("expected error for unknown key")
+		}
+	})
+}
+
+func TestLoadEntry(t *testing.T) {
+	t.Run("merges_in_order_with_inline_tags_last", func(t *testing.T) {
+		dir := t.TempDir()
+		base := filepath.Join(dir, "entry.yml")
+		host := filepath.Join(dir, "host.yml")
+		os.WriteFile(base, []byte("linux:\narch:\nemacs: /usr/bin/emacs\n"), 0644)
+		os.WriteFile(host, []byte("arch: \"!arch\"\neditor: vim\n"), 0644)
+		app := App{
+			entryPaths: []string{base, host},
+			inlineTags: map[string]string{"editor": "", "wsl": ""},
+		}
+
+		props, err := app.LoadEntry()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]string{
+			"linux":  "linux",
+			"arch":   "!arch",
+			"emacs":  "/usr/bin/emacs",
+			"editor": "editor",
+			"wsl":    "wsl",
+		}
+		if !reflect.DeepEqual(props, want) {
+			t.Errorf("props = %v, want %v", props, want)
+		}
+	})
+
+	t.Run("missing_file_is_error", func(t *testing.T) {
+		app := App{entryPaths: []string{filepath.Join(t.TempDir(), "nope.yml")}}
+		if _, err := app.LoadEntry(); err == nil {
+			t.Error("expected error for missing entry file")
+		}
+	})
+}

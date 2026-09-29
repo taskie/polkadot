@@ -5,15 +5,19 @@ An application to generate dotfiles from https://github.com/taskie/dotfiles .
 ## Usage
 
 ```
-polkadot [-n] [-V] <component-dir> [<component-dir> ...]
+polkadot [-c <polkadot.yml>] [-n] [-raw] [-V] [<component-dir> ...]
 ```
 
+- `-c` — path to a `polkadot.yml` config (default: `./polkadot.yml` if present).
 - `-n` — dry run; resolve everything but don't write any files.
+- `-raw` — concatenate fragments without normalizing newlines.
 - `-V` — print the version and exit.
 
-`polkadot` runs from your dotfiles root (the current working directory), which
-must contain `entry.yml`. The positional arguments are *component directories*
-that hold the fragments and config to assemble.
+The positional arguments are *component directories* that hold the fragments
+and config to assemble. If given, they replace `components` in `polkadot.yml`.
+
+Without a `polkadot.yml`, `polkadot` runs from your dotfiles root (the current
+working directory), which must contain `entry.yml`.
 
 ### Example
 
@@ -62,6 +66,27 @@ Generate the dotfiles:
 cd path/to/dotfiles
 polkadot -n common   # preview what would be written
 polkadot common      # write the files (here, ~/.bashrc)
+```
+
+### `polkadot.yml`
+
+Instead of passing everything on the command line, put a `polkadot.yml` in the
+dotfiles root. Relative paths in it are resolved against its own directory, so
+it works from any cwd:
+
+```yaml
+entries:            # merged in order, later wins (default: [entry.yml])
+  - entry.yml
+  - hosts/myhost.yml
+tags:               # inline entry tags, merged last
+  wsl:
+components:         # component dirs, later ones override earlier ones
+  - common
+raw: false          # same as -raw
+```
+
+```sh
+polkadot -c ~/dotfiles/polkadot.yml -n
 ```
 
 For each output file, matching fragments are concatenated in sorted order; a

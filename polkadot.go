@@ -33,6 +33,7 @@ func main() {
 }
 
 func run() error {
+	configFlag := flag.String("c", "", "path to "+configFileName+" (default: ./"+configFileName+" if it exists)")
 	dryRunFlag := flag.Bool("n", false, "performs a trial run")
 	rawFlag := flag.Bool("raw", false, "concatenate files without normalizing newlines")
 	versionFlag := flag.Bool("V", false, "shows version info")
@@ -46,13 +47,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	polkaDirPaths := flag.Args()
 
-	app := App{
-		dotfilesDirPath: pwd,
-		entryPath:       "entry.yml",
-		polkaDirPaths:   polkaDirPaths,
-		rawConcat:       *rawFlag,
+	var raw *bool
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "raw" {
+			raw = rawFlag
+		}
+	})
+	app, err := NewApp(pwd, *configFlag, flag.Args(), raw)
+	if err != nil {
+		return err
 	}
 
 	color.New(color.FgCyan, color.Bold).Println("* Preparing...")
@@ -72,12 +76,94 @@ func run() error {
 	return nil
 }
 
+// Config
+
+const configFileName = "polkadot.yml"
+
+type Config struct {
+	Entries    []string          `yaml:"entries"`
+	Tags       map[string]string `yaml:"tags"`
+	Components []string          `yaml:"components"`
+	Raw        *bool             `yaml:"raw"`
+}
+
+// LoadConfig reads a polkadot.yml. Relative paths in it are resolved against
+// the directory containing the file. An absent `entries` defaults to entry.yml.
+func LoadConfig(path string) (*Config, error) {
+	buf, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	var config Config
+	err = yaml.UnmarshalStrict(buf, &config)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if config.Entries == nil {
+		config.Entries = []string{"entry.yml"}
+	}
+	baseDir := filepath.Dir(path)
+	resolve := func(paths []string) {
+		for i, p := range paths {
+			if !filepath.IsAbs(p) {
+				paths[i] = filepath.Join(baseDir, p)
+			}
+		}
+	}
+	resolve(config.Entries)
+	resolve(config.Components)
+	return &config, nil
+}
+
+// NewApp builds an App from CLI inputs. If configPath is empty, ./polkadot.yml
+// is used when present; otherwise it falls back to ./entry.yml and args.
+// Non-empty args replace the configured components; a non-nil raw overrides
+// the configured value.
+func NewApp(pwd string, configPath string, args []string, raw *bool) (*App, error) {
+	if configPath == "" {
+		defaultPath := filepath.Join(pwd, configFileName)
+		if _, err := os.Stat(defaultPath); err == nil {
+			configPath = defaultPath
+		}
+	}
+	app := &App{
+		dotfilesDirPath: pwd,
+		entryPaths:      []string{filepath.Join(pwd, "entry.yml")},
+		polkaDirPaths:   args,
+	}
+	if configPath != "" {
+		if !filepath.IsAbs(configPath) {
+			configPath = filepath.Join(pwd, configPath)
+		}
+		config, err := LoadConfig(configPath)
+		if err != nil {
+			return nil, err
+		}
+		app.configPath = configPath
+		app.dotfilesDirPath = filepath.Dir(configPath)
+		app.entryPaths = config.Entries
+		app.inlineTags = config.Tags
+		if len(args) == 0 {
+			app.polkaDirPaths = config.Components
+		}
+		if config.Raw != nil {
+			app.rawConcat = *config.Raw
+		}
+	}
+	if raw != nil {
+		app.rawConcat = *raw
+	}
+	return app, nil
+}
+
 // Application
 
 type App struct {
 	// Input
+	configPath      string
 	dotfilesDirPath string
-	entryPath       string
+	entryPaths      []string
+	inlineTags      map[string]string
 	polkaDirPaths   []string
 	// Load
 	entryTags   map[string]string
@@ -93,7 +179,11 @@ type App struct {
 }
 
 func (a *App) Prepare() error {
+	if a.configPath != "" {
+		log.Printf("config: %s\n", a.configPath)
+	}
 	log.Printf("dotfiles dir: %s\n", a.dotfilesDirPath)
+	log.Printf("entry files: %+v\n", a.entryPaths)
 	log.Printf("component dirs: %+v\n", a.polkaDirPaths)
 
 	entryTags, err := a.LoadEntry()
@@ -169,14 +259,23 @@ func (a *App) Execute() error {
 // Application tasks
 
 func (a *App) LoadEntry() (map[string]string, error) {
-	buf, err := os.ReadFile(a.entryPath)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", a.entryPath, err)
+	props := make(map[string]string)
+	for _, entryPath := range a.entryPaths {
+		buf, err := os.ReadFile(entryPath)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", entryPath, err)
+		}
+		var subProps map[string]string
+		err = yaml.Unmarshal(buf, &subProps)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", entryPath, err)
+		}
+		for k, v := range subProps {
+			props[k] = v // overwrite
+		}
 	}
-	var props map[string]string
-	err = yaml.Unmarshal(buf, &props)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", a.entryPath, err)
+	for k, v := range a.inlineTags {
+		props[k] = v // overwrite
 	}
 	for k, v := range props {
 		if v == "" {
