@@ -61,14 +61,16 @@ entries:        # entry files merged in order (later wins); default [entry.yml],
     optional: true          # when it does not exist
 tags:           # inline entry tags, merged after the entry files
   wsl:
-components:     # component dirs, in override order
+components:     # component dirs, in override order (same forms as entries)
   - common
   - linux
+  - path: private
+    optional: true
 raw: false      # same as -raw
 ```
 
 Unknown keys are rejected (`Decoder.KnownFields(true)`, plus a manual key check
-in `EntrySpec.UnmarshalYAML`, which `KnownFields` does not reach) to catch typos.
+in `PathSpec.UnmarshalYAML`, which `KnownFields` does not reach) to catch typos.
 
 All YAML files are decoded through `decodeYAML`, which rejects unknown struct
 fields and duplicate keys. `rules.yml` additionally requires `dir`/`dirs` and
@@ -120,7 +122,9 @@ paths.yml ──►  Collect (probe the system: exec/file/dir/env)
 ### 1. Load (`LoadEntry`, `LoadTags`, `LoadRules`)
 
 `CheckComponents` first verifies that every component path exists and is a
-directory; a missing or non-directory component is an error.
+directory; a missing or non-directory component is an error, except that a
+missing `optional` component is skipped. The surviving paths become
+`polkaDirPaths`, which every later stage iterates.
 
 - **entry files** (`entry.yml` in the dotfiles root, or the `entries` list of
   `polkadot.yml`) — each a flat `map[string]string` of the tags this machine

@@ -88,6 +88,8 @@ tags:               # inline entry tags, merged last
   wsl:
 components:         # component dirs, later ones override earlier ones
   - common
+  - path: private   # skipped if it does not exist
+    optional: true
 raw: false          # same as -raw
 ```
 

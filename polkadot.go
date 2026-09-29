@@ -105,42 +105,43 @@ func run() error {
 const configFileName = "polkadot.yml"
 
 type Config struct {
-	Entries    []EntrySpec       `yaml:"entries"`
+	Entries    []PathSpec        `yaml:"entries"`
 	Tags       map[string]string `yaml:"tags"`
-	Components []string          `yaml:"components"`
+	Components []PathSpec        `yaml:"components"`
 	Raw        *bool             `yaml:"raw"`
 }
 
-// EntrySpec is an entry file reference in polkadot.yml. It is written either
-// as a plain path or as {path: ..., optional: true}; an optional entry file is
-// skipped when it does not exist.
-type EntrySpec struct {
+// PathSpec is a file or directory reference in polkadot.yml (`entries`,
+// `components`). It is written either as a plain path or as
+// {path: ..., optional: true}; an optional path is skipped when it does not
+// exist.
+type PathSpec struct {
 	Path     string `yaml:"path"`
 	Optional bool   `yaml:"optional"`
 }
 
-func (e *EntrySpec) UnmarshalYAML(node *yaml.Node) error {
+func (e *PathSpec) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
 	case yaml.ScalarNode:
-		*e = EntrySpec{Path: node.Value}
+		*e = PathSpec{Path: node.Value}
 	case yaml.MappingNode:
 		// node.Decode does not inherit KnownFields, so check keys here.
 		for i := 0; i < len(node.Content); i += 2 {
 			switch key := node.Content[i].Value; key {
 			case "path", "optional":
 			default:
-				return fmt.Errorf("line %d: unknown entry field %q", node.Content[i].Line, key)
+				return fmt.Errorf("line %d: unknown field %q", node.Content[i].Line, key)
 			}
 		}
-		type plain EntrySpec
+		type plain PathSpec
 		if err := node.Decode((*plain)(e)); err != nil {
 			return err
 		}
 	default:
-		return fmt.Errorf("line %d: entry must be a path or {path, optional}", node.Line)
+		return fmt.Errorf("line %d: must be a path or {path, optional}", node.Line)
 	}
 	if e.Path == "" {
-		return fmt.Errorf("line %d: entry path must not be empty", node.Line)
+		return fmt.Errorf("line %d: path must not be empty", node.Line)
 	}
 	return nil
 }
@@ -153,7 +154,7 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	if config.Entries == nil {
-		config.Entries = []EntrySpec{{Path: "entry.yml"}}
+		config.Entries = []PathSpec{{Path: "entry.yml"}}
 	}
 	baseDir := filepath.Dir(path)
 	resolve := func(p string) string {
@@ -166,7 +167,7 @@ func LoadConfig(path string) (*Config, error) {
 		config.Entries[i].Path = resolve(config.Entries[i].Path)
 	}
 	for i := range config.Components {
-		config.Components[i] = resolve(config.Components[i])
+		config.Components[i].Path = resolve(config.Components[i].Path)
 	}
 	return &config, nil
 }
@@ -184,8 +185,11 @@ func NewApp(pwd string, configPath string, args []string, raw *bool) (*App, erro
 	}
 	app := &App{
 		dotfilesDirPath: pwd,
-		entries:         []EntrySpec{{Path: filepath.Join(pwd, "entry.yml")}},
-		polkaDirPaths:   args,
+		entries:         []PathSpec{{Path: filepath.Join(pwd, "entry.yml")}},
+		components:      make([]PathSpec, 0, len(args)),
+	}
+	for _, arg := range args {
+		app.components = append(app.components, PathSpec{Path: arg})
 	}
 	if configPath != "" {
 		if !filepath.IsAbs(configPath) {
@@ -200,7 +204,7 @@ func NewApp(pwd string, configPath string, args []string, raw *bool) (*App, erro
 		app.entries = config.Entries
 		app.inlineTags = config.Tags
 		if len(args) == 0 {
-			app.polkaDirPaths = config.Components
+			app.components = config.Components
 		}
 		if config.Raw != nil {
 			app.rawConcat = *config.Raw
@@ -218,9 +222,10 @@ type App struct {
 	// Input
 	configPath      string
 	dotfilesDirPath string
-	entries         []EntrySpec
+	entries         []PathSpec
 	inlineTags      map[string]string
-	polkaDirPaths   []string
+	components      []PathSpec
+	polkaDirPaths   []string // components that exist, set by CheckComponents
 	verbose         bool
 	// Load
 	entryTags   map[string]string
@@ -261,11 +266,10 @@ func (a *App) Prepare() error {
 	}
 	a.logf("dotfiles dir: %s\n", a.dotfilesDirPath)
 	a.logf("entry files: %+v\n", a.entries)
-	a.logf("component dirs: %+v\n", a.polkaDirPaths)
-
 	if err := a.CheckComponents(); err != nil {
 		return err
 	}
+	a.logf("component dirs: %+v\n", a.polkaDirPaths)
 
 	entryTags, err := a.LoadEntry()
 	if err != nil {
@@ -352,11 +356,18 @@ func (a *App) Execute() error {
 
 // CheckComponents verifies that every component path is an existing directory,
 // so a typo or a file passed by mistake fails with a clear message instead of
-// being silently ignored.
+// being silently ignored. A missing optional component is skipped. The
+// components to use are stored in polkaDirPaths.
 func (a *App) CheckComponents() error {
-	for _, dirPath := range a.polkaDirPaths {
+	a.polkaDirPaths = make([]string, 0, len(a.components))
+	for _, component := range a.components {
+		dirPath := component.Path
 		fi, err := os.Stat(dirPath)
 		if errors.Is(err, fs.ErrNotExist) {
+			if component.Optional {
+				a.logf("skip optional component dir: %s\n", dirPath)
+				continue
+			}
 			return fmt.Errorf("component dir %s: not found", dirPath)
 		}
 		if err != nil {
@@ -365,6 +376,7 @@ func (a *App) CheckComponents() error {
 		if !fi.IsDir() {
 			return fmt.Errorf("component dir %s: not a directory", dirPath)
 		}
+		a.polkaDirPaths = append(a.polkaDirPaths, dirPath)
 	}
 	return nil
 }
